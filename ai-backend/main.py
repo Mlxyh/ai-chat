@@ -1,10 +1,12 @@
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import os
 import json
+import time
+from collections import defaultdict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,6 +25,27 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
 QWEN_API_KEY = os.getenv("QWEN_API_KEY")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+RATE_LIMIT = 10  # 每小时最多请求次数
+rate_store = defaultdict(lambda: {"count": 0, "reset_at": 0})
+
+def get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host
+
+def check_rate_limit(ip: str) -> bool:
+    now = time.time()
+    record = rate_store[ip]
+    if now > record["reset_at"]:
+        record["count"] = 0
+        record["reset_at"] = now + 3600
+    if record["count"] >= RATE_LIMIT:
+        return False
+    record["count"] += 1
+    return True
 
 session_histories = {}
 
@@ -30,9 +53,15 @@ class ChatRequest(BaseModel):
     model: str
     message: str
     session_id: str = "default"
+    admin_token: str = ""
 
 @app.post("/chat")
-def chat(data: ChatRequest):
+def chat(data: ChatRequest, request: Request):
+    if data.admin_token != ADMIN_TOKEN or not ADMIN_TOKEN:
+        ip = get_client_ip(request)
+        if not check_rate_limit(ip):
+            return JSONResponse(status_code=429, content={"detail": "每小时限制10条消息，请稍后再试"})
+
     history = session_histories.setdefault(data.session_id, [])
 
     if data.model == "openai":
