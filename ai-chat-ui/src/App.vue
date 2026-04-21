@@ -3,7 +3,19 @@
 
     <!-- 顶部 -->
     <div class="header">
-      <div class="title">AI Assistant</div>
+      <div class="title" @click="titleClick">AI Assistant</div>
+
+    <!-- 管理员弹窗 -->
+    <div v-if="showAdminModal" class="modal-overlay" @click.self="showAdminModal = false">
+      <div class="modal">
+        <div class="modal-title">管理员设置</div>
+        <input v-model="tokenInput" type="password" placeholder="输入 Admin Token" class="token-input" />
+        <div class="modal-btns">
+          <button class="modal-cancel" @click="showAdminModal = false">取消</button>
+          <button @click="saveToken">保存</button>
+        </div>
+      </div>
+    </div>
       <div class="header-right">
         <select v-model="model">
           <option value="deepseek">DeepSeek</option>
@@ -65,7 +77,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://47.100.215.128:8000'
+const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 hljs.configure({ ignoreUnescapedHTML: true })
 
@@ -103,6 +115,29 @@ const errorMsg = ref('')
 const chatRef = ref(null)
 const textareaRef = ref(null)
 let abortController = null
+
+const adminToken = ref(localStorage.getItem('admin-token') || '')
+const showAdminModal = ref(false)
+const tokenInput = ref(adminToken.value)
+let titleClickCount = 0
+let titleClickTimer = null
+
+const titleClick = () => {
+  titleClickCount++
+  clearTimeout(titleClickTimer)
+  titleClickTimer = setTimeout(() => { titleClickCount = 0 }, 2000)
+  if (titleClickCount >= 5) {
+    titleClickCount = 0
+    tokenInput.value = adminToken.value
+    showAdminModal.value = true
+  }
+}
+
+const saveToken = () => {
+  adminToken.value = tokenInput.value
+  localStorage.setItem('admin-token', tokenInput.value)
+  showAdminModal.value = false
+}
 
 watch(messages, (val) => {
   localStorage.setItem('chat-messages', JSON.stringify(val))
@@ -159,7 +194,7 @@ const send = async () => {
     const response = await fetch(`${API_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: userInput, model: model.value }),
+      body: JSON.stringify({ message: userInput, model: model.value, admin_token: adminToken.value }),
       signal: abortController.signal
     })
 
@@ -566,5 +601,64 @@ button:active {
 .bubble code {
   font-family: 'Courier New', monospace;
   font-size: 13px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.token-input {
+  padding: 10px 14px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  font-size: 14px;
+  color: #333;
+  background: #f9f9f9;
+}
+
+.token-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.modal-btns {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.modal-cancel {
+  background: #eee;
+  color: #333;
+  box-shadow: none;
+  padding: 10px 18px;
+}
+
+.modal-cancel:hover {
+  background: #ddd;
+  box-shadow: none;
+  transform: none;
 }
 </style>
