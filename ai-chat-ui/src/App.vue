@@ -1,114 +1,225 @@
 <template>
-  <div class="app">
-
-    <!-- 顶部 -->
-    <div class="header">
-      <div class="title" @click="titleClick">AI Assistant</div>
-
-    <!-- 管理员弹窗 -->
-    <div v-if="showAdminModal" class="modal-overlay" @click.self="showAdminModal = false">
-      <div class="modal">
-        <div class="modal-title">管理员设置</div>
-        <input v-model="tokenInput" type="password" placeholder="输入 Admin Token" class="token-input" />
-        <div class="modal-btns">
-          <button class="modal-cancel" @click="showAdminModal = false">取消</button>
-          <button @click="saveToken">保存</button>
+  <div class="app-shell">
+    <main v-if="!currentUser" class="auth-page">
+      <section class="auth-panel">
+        <div class="auth-brand">
+          <p class="eyebrow">AI Chat</p>
+          <h1>登录后开始对话</h1>
+          <p>使用自己的 API Key 选择模型，聊天请求由后端安全转发。</p>
         </div>
-      </div>
-    </div>
-      <div class="header-right">
-        <select v-model="model">
-          <option value="deepseek">DeepSeek</option>
-          <option value="openai">OpenAI</option>
-          <option value="qwen">通义千问</option>
-        </select>
-        <button class="clear-btn" @click="clearHistory" title="清空对话">清空</button>
-      </div>
-    </div>
 
-    <!-- 聊天区 -->
-    <div class="chat" ref="chatRef">
-      <div v-if="messages.length === 0" class="empty-hint">
-        选择模型，开始对话
-      </div>
-
-      <div
-        v-for="(msg, i) in messages"
-        :key="i"
-        :class="['msg', msg.role]"
-      >
-        <div class="bubble">
-          <div v-if="msg.done" v-html="msg.content || ''"></div>
-          <div v-else class="streaming-text">{{ msg.content || '' }}</div>
+        <div class="auth-tabs" role="tablist">
+          <button :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">登录</button>
+          <button :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">注册</button>
         </div>
-      </div>
 
-      <div v-if="loading" class="msg ai">
-        <div class="bubble typing">
-          思考中<span class="dots">...</span>
+        <form class="auth-form" @submit.prevent="submitAuth">
+          <label>
+            用户名
+            <input v-model.trim="authForm.username" autocomplete="username" placeholder="3-32位用户名" />
+          </label>
+          <label>
+            密码
+            <input
+              v-model="authForm.password"
+              :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'"
+              type="password"
+              placeholder="至少6位密码"
+            />
+          </label>
+
+          <p v-if="authError" class="form-error">{{ authError }}</p>
+          <button class="primary-action" type="submit" :disabled="authLoading">
+            {{ authLoading ? '处理中...' : authMode === 'login' ? '登录' : '注册并登录' }}
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <main v-else class="chat-layout">
+      <aside class="settings-panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">当前账号</p>
+            <h2>{{ currentUser.username }}</h2>
+          </div>
+          <button class="ghost-button" @click="logout">退出</button>
         </div>
-      </div>
 
-      <div v-if="errorMsg" class="msg ai">
-        <div class="bubble error-bubble">⚠️ {{ errorMsg }}</div>
-      </div>
-    </div>
+        <section class="settings-section">
+          <label class="field-label">模型服务</label>
+          <div class="provider-grid">
+            <button
+              v-for="option in providerOptions"
+              :key="option.value"
+              :class="{ active: provider === option.value }"
+              @click="provider = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </section>
 
-    <!-- 输入区 -->
-    <div class="input-box">
-      <textarea
-        v-model="text"
-        @keydown.enter.exact.prevent="send"
-        @input="autoResize"
-        ref="textareaRef"
-        placeholder="输入你的问题... (Enter发送，Shift+Enter换行)"
-        rows="1"
-      ></textarea>
-      <button v-if="streaming" class="stop-btn" @click="stop">停止</button>
-      <button v-else @click="send" :disabled="loading">发送</button>
-    </div>
+        <section class="settings-section">
+          <label class="field-label" for="apiKey">API Key</label>
+          <input
+            id="apiKey"
+            v-model.trim="activeSettings.apiKey"
+            type="password"
+            autocomplete="off"
+            placeholder="sk-..."
+          />
+        </section>
 
+        <section class="settings-section">
+          <label class="field-label" for="baseUrl">Base URL</label>
+          <input id="baseUrl" v-model.trim="activeSettings.baseUrl" placeholder="https://api.example.com/v1" />
+        </section>
+
+        <section class="settings-section">
+          <label class="field-label" for="modelName">模型名称</label>
+          <input id="modelName" v-model.trim="activeSettings.modelName" placeholder="gpt-4o-mini" />
+        </section>
+
+        <p class="settings-note">API Key 仅保存在当前浏览器，不会保存到后端数据库。</p>
+      </aside>
+
+      <section class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">{{ activeProviderLabel }}</p>
+            <h1>{{ activeSettings.modelName || '未选择模型' }}</h1>
+          </div>
+          <button class="ghost-button" @click="clearHistory">清空对话</button>
+        </header>
+
+        <div ref="chatRef" class="chat-messages">
+          <div v-if="messages.length === 0" class="empty-state">
+            <h2>开始新的对话</h2>
+            <p>填写 API Key 并确认模型后，输入问题即可发送。</p>
+          </div>
+
+          <div v-for="(msg, index) in messages" :key="index" :class="['message-row', msg.role]">
+            <div class="message-bubble">
+              <div v-if="msg.done" v-html="msg.content || ''"></div>
+              <div v-else class="streaming-text">{{ msg.content || '' }}</div>
+            </div>
+          </div>
+
+          <div v-if="loading" class="message-row ai">
+            <div class="message-bubble typing">思考中...</div>
+          </div>
+        </div>
+
+        <p v-if="errorMsg" class="chat-error">{{ errorMsg }}</p>
+
+        <form class="composer" @submit.prevent="send">
+          <textarea
+            ref="textareaRef"
+            v-model="text"
+            rows="1"
+            placeholder="输入你的问题，Enter 发送，Shift+Enter 换行"
+            @input="autoResize"
+            @keydown.enter.exact.prevent="send"
+          ></textarea>
+          <button v-if="streaming" type="button" class="danger-button" @click="stop">停止</button>
+          <button v-else class="primary-action compact" type="submit" :disabled="loading">发送</button>
+        </form>
+      </section>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
+const AUTH_TOKEN_KEY = 'auth-token'
+const AUTH_USER_KEY = 'auth-user'
+
+const providerOptions = [
+  {
+    value: 'deepseek',
+    label: 'DeepSeek',
+    defaults: {
+      apiKey: '',
+      baseUrl: 'https://api.deepseek.com',
+      modelName: 'deepseek-chat',
+    },
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI',
+    defaults: {
+      apiKey: '',
+      baseUrl: 'https://api.openai.com/v1',
+      modelName: 'gpt-4o-mini',
+    },
+  },
+  {
+    value: 'qwen',
+    label: '通义千问',
+    defaults: {
+      apiKey: '',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      modelName: 'qwen-plus',
+    },
+  },
+  {
+    value: 'custom',
+    label: '自定义',
+    defaults: {
+      apiKey: '',
+      baseUrl: '',
+      modelName: '',
+    },
+  },
+]
 
 hljs.configure({ ignoreUnescapedHTML: true })
 
 marked.setOptions({
-  highlight: (code) => hljs.highlightAuto(code).value
+  highlight: (code) => hljs.highlightAuto(code).value,
 })
 
 window.copyCode = (btn) => {
-  const code = btn.parentElement.querySelector('code').innerText
+  const code = btn.parentElement.querySelector('code')?.innerText || ''
   navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = '已复制!'
-    setTimeout(() => btn.textContent = '复制', 2000)
+    btn.textContent = '已复制'
+    setTimeout(() => (btn.textContent = '复制'), 1600)
   })
 }
 
-const renderMarkdown = (text) => {
-  if (!text) return ''
+const renderMarkdown = (value) => {
+  if (!value) return ''
   try {
-    let html = marked.parse(text.replace(/pythonprint/g, 'print'))
-    html = html.replace(/<pre>/g, '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">复制</button><pre>')
+    let html = marked.parse(value)
+    html = html.replace(
+      /<pre>/g,
+      '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">复制</button><pre>',
+    )
     html = html.replace(/<\/pre>/g, '</pre></div>')
     return html
-  } catch (e) {
-    return text
+  } catch {
+    return value
   }
 }
 
-const saved = localStorage.getItem('chat-messages')
+const authMode = ref('login')
+const authLoading = ref(false)
+const authError = ref('')
+const authForm = reactive({ username: '', password: '' })
+const token = ref(localStorage.getItem(AUTH_TOKEN_KEY) || '')
+const savedUser = localStorage.getItem(AUTH_USER_KEY)
+const currentUser = ref(savedUser ? JSON.parse(savedUser) : null)
+
+const provider = ref('deepseek')
+const settings = ref(buildDefaultSettings())
 const text = ref('')
-const messages = ref(saved ? JSON.parse(saved) : [])
-const model = ref('deepseek')
+const messages = ref([])
 const loading = ref(false)
 const streaming = ref(false)
 const errorMsg = ref('')
@@ -116,51 +227,146 @@ const chatRef = ref(null)
 const textareaRef = ref(null)
 let abortController = null
 
-const adminToken = ref(localStorage.getItem('admin-token') || '')
-const showAdminModal = ref(false)
-const tokenInput = ref(adminToken.value)
-let titleClickCount = 0
-let titleClickTimer = null
+const activeSettings = computed(() => settings.value[provider.value])
+const activeProviderLabel = computed(() => {
+  return providerOptions.find((item) => item.value === provider.value)?.label || '自定义'
+})
 
-const titleClick = () => {
-  titleClickCount++
-  clearTimeout(titleClickTimer)
-  titleClickTimer = setTimeout(() => { titleClickCount = 0 }, 2000)
-  if (titleClickCount >= 5) {
-    titleClickCount = 0
-    tokenInput.value = adminToken.value
-    showAdminModal.value = true
+function buildDefaultSettings() {
+  return Object.fromEntries(providerOptions.map((item) => [item.value, { ...item.defaults }]))
+}
+
+function userStorageKey(name) {
+  return currentUser.value ? `${name}:${currentUser.value.username}` : name
+}
+
+function switchAuthMode(mode) {
+  authMode.value = mode
+  authError.value = ''
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  }
+  if (token.value) headers.Authorization = `Bearer ${token.value}`
+
+  const response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json') ? await response.json() : null
+  if (!response.ok) {
+    throw new Error(payload?.detail || `请求失败 ${response.status}`)
+  }
+  return payload
+}
+
+async function submitAuth() {
+  authError.value = ''
+  if (!authForm.username || !authForm.password) {
+    authError.value = '请输入用户名和密码'
+    return
+  }
+
+  authLoading.value = true
+  try {
+    const payload = await apiFetch(`/auth/${authMode.value}`, {
+      method: 'POST',
+      body: JSON.stringify(authForm),
+    })
+    setSession(payload.token, payload.user)
+  } catch (error) {
+    authError.value = error.message
+  } finally {
+    authLoading.value = false
   }
 }
 
-const saveToken = () => {
-  adminToken.value = tokenInput.value
-  localStorage.setItem('admin-token', tokenInput.value)
-  showAdminModal.value = false
+function setSession(nextToken, user) {
+  token.value = nextToken
+  currentUser.value = user
+  localStorage.setItem(AUTH_TOKEN_KEY, nextToken)
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user))
+  authForm.password = ''
+  loadUserData()
 }
 
-watch(messages, (val) => {
-  localStorage.setItem('chat-messages', JSON.stringify(val))
-}, { deep: true })
+async function restoreSession() {
+  if (!token.value) return
+  try {
+    const payload = await apiFetch('/auth/me')
+    setSession(token.value, payload.user)
+  } catch {
+    logout()
+  }
+}
+
+function logout() {
+  token.value = ''
+  currentUser.value = null
+  messages.value = []
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+  localStorage.removeItem(AUTH_USER_KEY)
+}
+
+function loadUserData() {
+  const savedSettings = localStorage.getItem(userStorageKey('model-settings'))
+  const mergedSettings = buildDefaultSettings()
+  if (savedSettings) {
+    const parsed = JSON.parse(savedSettings)
+    for (const key of Object.keys(mergedSettings)) {
+      mergedSettings[key] = { ...mergedSettings[key], ...(parsed[key] || {}) }
+    }
+  }
+  settings.value = mergedSettings
+
+  provider.value = localStorage.getItem(userStorageKey('selected-provider')) || 'deepseek'
+  const savedMessages = localStorage.getItem(userStorageKey('chat-messages'))
+  messages.value = savedMessages ? JSON.parse(savedMessages) : []
+}
+
+watch(
+  settings,
+  (value) => {
+    if (currentUser.value) {
+      localStorage.setItem(userStorageKey('model-settings'), JSON.stringify(value))
+    }
+  },
+  { deep: true },
+)
+
+watch(provider, (value) => {
+  if (currentUser.value) localStorage.setItem(userStorageKey('selected-provider'), value)
+})
+
+watch(
+  messages,
+  (value) => {
+    if (currentUser.value) {
+      localStorage.setItem(userStorageKey('chat-messages'), JSON.stringify(value))
+    }
+  },
+  { deep: true },
+)
 
 const scrollToBottom = async () => {
   await nextTick()
   if (chatRef.value) chatRef.value.scrollTop = chatRef.value.scrollHeight
 }
 
-const autoResize = () => {
-  const ta = textareaRef.value
-  if (!ta) return
-  ta.style.height = 'auto'
-  ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'
+function autoResize() {
+  const textarea = textareaRef.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
 }
 
-const clearHistory = () => {
+function clearHistory() {
   messages.value = []
   errorMsg.value = ''
 }
 
-const stop = () => {
+function stop() {
   if (abortController) abortController.abort()
   streaming.value = false
   loading.value = false
@@ -172,33 +378,58 @@ const stop = () => {
   }
 }
 
-const send = async () => {
-  if (!text.value.trim() || loading.value) return
+function validateChatSettings() {
+  if (!activeSettings.value.apiKey) return '请先填写当前模型的 API Key'
+  if (!activeSettings.value.baseUrl) return '请先填写 Base URL'
+  if (!activeSettings.value.modelName) return '请先填写模型名称'
+  return ''
+}
 
-  const userInput = text.value
+async function send() {
+  const userInput = text.value.trim()
+  if (!userInput || loading.value) return
+
+  const settingsError = validateChatSettings()
+  if (settingsError) {
+    errorMsg.value = settingsError
+    return
+  }
+
   text.value = ''
   if (textareaRef.value) textareaRef.value.style.height = 'auto'
   errorMsg.value = ''
 
-  messages.value.push({ role: 'user', content: userInput })
+  messages.value.push({ role: 'user', content: userInput, done: true })
   const aiMsg = { role: 'ai', content: '', raw: '', done: false }
   messages.value.push(aiMsg)
 
   loading.value = true
   streaming.value = false
-  scrollToBottom()
-
   abortController = new AbortController()
+  scrollToBottom()
 
   try {
     const response = await fetch(`${API_URL}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: userInput, model: model.value, admin_token: adminToken.value }),
-      signal: abortController.signal
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        provider: provider.value,
+        message: userInput,
+        session_id: userStorageKey('default-session'),
+        api_key: activeSettings.value.apiKey,
+        base_url: activeSettings.value.baseUrl,
+        model_name: activeSettings.value.modelName,
+      }),
+      signal: abortController.signal,
     })
 
-    if (!response.ok) throw new Error(`服务器错误 ${response.status}`)
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.detail || `服务器错误 ${response.status}`)
+    }
 
     loading.value = false
     streaming.value = true
@@ -224,11 +455,11 @@ const send = async () => {
         }
       }
     }
-  } catch (e) {
-    if (e.name !== 'AbortError') {
-      errorMsg.value = '连接失败，请检查网络或稍后重试'
-      messages.value.pop()
-      messages.value.pop()
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      errorMsg.value = error.message || '连接失败，请检查网络或稍后重试'
+      messages.value.splice(-2, 2)
+      if (error.message.includes('登录')) logout()
     }
   } finally {
     loading.value = false
@@ -241,424 +472,429 @@ const send = async () => {
     }
   }
 }
+
+onMounted(() => {
+  if (currentUser.value) loadUserData()
+  restoreSession()
+})
 </script>
 
 <style>
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+* {
+  box-sizing: border-box;
 }
 
-.clear-btn {
-  padding: 8px 14px;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 12px;
-  color: white;
-  font-size: 13px;
+body {
+  margin: 0;
+  background: #eef1f5;
+  color: #172033;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
   cursor: pointer;
-  transition: all 0.3s ease;
 }
 
-.clear-btn:hover {
-  background: rgba(255, 80, 80, 0.4);
-  transform: translateY(-2px);
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
-.empty-hint {
-  text-align: center;
-  color: rgba(255, 255, 255, 0.5);
-  margin-top: 40vh;
-  font-size: 16px;
+.app-shell {
+  min-height: 100vh;
 }
 
-.stop-btn {
-  padding: 14px 20px;
-  background: rgba(255, 80, 80, 0.7) !important;
-  box-shadow: 0 4px 15px rgba(255, 80, 80, 0.4) !important;
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #e9edf3;
 }
 
-.stop-btn:hover {
-  background: rgba(255, 80, 80, 0.9) !important;
-  box-shadow: 0 6px 20px rgba(255, 80, 80, 0.6) !important;
+.auth-panel {
+  width: min(440px, 100%);
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 28px;
+  box-shadow: 0 18px 45px rgba(23, 32, 51, 0.10);
 }
 
-.error-bubble {
-  background: rgba(255, 80, 80, 0.15) !important;
-  border: 1px solid rgba(255, 80, 80, 0.3) !important;
-  color: #ff6b6b !important;
+.auth-brand h1,
+.chat-header h1,
+.panel-header h2,
+.empty-state h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.auth-brand h1 {
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.auth-brand p:last-child {
+  margin: 10px 0 0;
+  color: #5c667a;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #53627c;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 26px 0 18px;
+  padding: 4px;
+  background: #eef1f5;
+  border-radius: 8px;
+}
+
+.auth-tabs button,
+.provider-grid button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #53627c;
+  min-height: 38px;
+  font-weight: 700;
+}
+
+.auth-tabs button.active,
+.provider-grid button.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.12);
+}
+
+.auth-form,
+.settings-section {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form label,
+.settings-section label {
+  display: grid;
+  gap: 7px;
+  color: #344055;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid #cbd3df;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+input {
+  min-height: 44px;
+  padding: 10px 12px;
 }
 
 textarea {
-  flex: 1;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
-  color: white;
-  font-size: 15px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  min-height: 48px;
+  max-height: 180px;
+  padding: 12px 14px;
   resize: none;
   line-height: 1.5;
-  transition: all 0.3s ease;
-  overflow-y: hidden;
 }
 
-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.6);
-}
-
+input:focus,
 textarea:focus {
-  outline: none;
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+}
+
+.primary-action,
+.ghost-button,
+.danger-button {
+  border: 0;
+  border-radius: 8px;
+  min-height: 42px;
+  padding: 0 16px;
+  font-weight: 800;
+}
+
+.primary-action {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.primary-action:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.primary-action.compact,
+.danger-button {
+  min-width: 78px;
+  height: 48px;
+}
+
+.ghost-button {
+  background: #eef1f5;
+  color: #243044;
+}
+
+.ghost-button:hover {
+  background: #e1e7f0;
+}
+
+.danger-button {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.form-error,
+.chat-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 14px;
+}
+
+.chat-layout {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  background: #eef1f5;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 22px;
+  border-right: 1px solid #d8dee8;
+  background: #f8fafc;
+  overflow-y: auto;
+}
+
+.panel-header,
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-header h2 {
+  font-size: 20px;
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 6px;
+  background: #e9edf3;
+  border-radius: 8px;
+}
+
+.field-label {
+  color: #344055;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-note {
+  margin: auto 0 0;
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chat-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.chat-header {
+  min-height: 74px;
+  padding: 16px 22px;
+  border-bottom: 1px solid #d8dee8;
+}
+
+.chat-header h1 {
+  font-size: 20px;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px;
+}
+
+.empty-state {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: #667085;
+}
+
+.empty-state h2 {
+  color: #172033;
+  font-size: 24px;
+}
+
+.empty-state p {
+  margin: 10px 0 0;
+}
+
+.message-row {
+  display: flex;
+  margin: 14px 0;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-row.ai {
+  justify-content: flex-start;
+}
+
+.message-bubble {
+  max-width: min(760px, 78%);
+  padding: 13px 16px;
+  border-radius: 8px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.message-row.user .message-bubble {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.message-row.ai .message-bubble {
+  background: #f4f6fa;
+  border: 1px solid #e3e8f0;
+  color: #172033;
+}
+
+.message-bubble p {
+  margin: 0 0 12px;
+}
+
+.message-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.message-bubble pre {
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: #111827;
+  color: #f8fafc;
+}
+
+.message-bubble code {
+  font-family: "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
 }
 
 .code-block {
   position: relative;
-  margin: 10px 0;
 }
 
 .copy-btn {
   position: absolute;
   top: 8px;
   right: 8px;
-  padding: 4px 10px !important;
-  font-size: 12px !important;
-  background: rgba(102, 126, 234, 0.8) !important;
-  border-radius: 6px !important;
-  box-shadow: none !important;
-  transform: none !important;
-  cursor: pointer;
-  z-index: 1;
-  border: none;
-  color: white;
+  border: 0;
+  border-radius: 6px;
+  background: #334155;
+  color: #ffffff;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
-.copy-btn:hover {
-  background: rgba(102, 126, 234, 1) !important;
-  transform: none !important;
+.typing,
+.streaming-text {
+  white-space: pre-wrap;
 }
 
-body {
-  margin: 0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  overflow: hidden;
+.chat-error {
+  padding: 0 22px 12px;
 }
 
-body::before {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background:
-    radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3), transparent 50%),
-    radial-gradient(circle at 80% 80%, rgba(255, 119, 198, 0.3), transparent 50%),
-    radial-gradient(circle at 40% 20%, rgba(138, 119, 255, 0.3), transparent 50%);
-  animation: gradientShift 15s ease infinite;
-  pointer-events: none;
-}
-
-@keyframes gradientShift {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.8; transform: scale(1.1); }
-}
-
-.app {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  z-index: 1;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
-}
-
-.title {
-  font-size: 24px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #fff 0%, #f0f0f0 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.5px;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-}
-
-select {
-  padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 12px;
-  color: white;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-select:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-select option {
-  background: #667eea;
-  color: white;
-}
-
-.chat {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  scroll-behavior: smooth;
-}
-
-.chat::-webkit-scrollbar {
-  width: 8px;
-}
-
-.chat::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-}
-
-.chat::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 10px;
-}
-
-.chat::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.msg {
-  display: flex;
-  margin: 16px 0;
-  animation: slideIn 0.4s ease;
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.msg.user {
-  justify-content: flex-end;
-}
-
-.msg.ai {
-  justify-content: flex-start;
-}
-
-.bubble {
-  max-width: 70%;
-  padding: 14px 18px;
-  border-radius: 18px;
-  line-height: 1.6;
-  font-size: 15px;
-  position: relative;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-  transition: all 0.3s ease;
-}
-
-.bubble:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-}
-
-.msg.user .bubble {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border-bottom-right-radius: 4px;
-}
-
-.msg.ai .bubble {
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: #333;
-  border-bottom-left-radius: 4px;
-}
-
-.input-box {
-  display: flex;
-  gap: 12px;
-  padding: 20px 24px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-input {
-  flex: 1;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 16px;
-  color: white;
-  font-size: 15px;
-  transition: all 0.3s ease;
-}
-
-input::placeholder {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-input:focus {
-  outline: none;
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
-}
-
-button {
-  padding: 14px 24px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border: none;
-  border-radius: 16px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-}
-
-button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
-}
-
-button:active {
-  transform: translateY(0);
-}
-
-.typing {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.typing .dots {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.typing .dots::after {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #667eea;
-  animation: bounce 1.4s infinite ease-in-out;
-}
-
-@keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-    opacity: 0.5;
-  }
-  40% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* 代码块样式 */
-.bubble pre {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 12px;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.bubble code {
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-}
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal {
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  width: 300px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.modal-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
-}
-
-.token-input {
-  padding: 10px 14px;
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  font-size: 14px;
-  color: #333;
-  background: #f9f9f9;
-}
-
-.token-input:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.modal-btns {
+.composer {
   display: flex;
   gap: 10px;
-  justify-content: flex-end;
+  align-items: flex-end;
+  padding: 16px 22px;
+  border-top: 1px solid #d8dee8;
+  background: #ffffff;
 }
 
-.modal-cancel {
-  background: #eee;
-  color: #333;
-  box-shadow: none;
-  padding: 10px 18px;
+@media (max-width: 860px) {
+  .chat-layout {
+    height: auto;
+    min-height: 100vh;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-panel {
+    border-right: 0;
+    border-bottom: 1px solid #d8dee8;
+  }
+
+  .chat-panel {
+    min-height: 70vh;
+  }
+
+  .message-bubble {
+    max-width: 92%;
+  }
 }
 
-.modal-cancel:hover {
-  background: #ddd;
-  box-shadow: none;
-  transform: none;
+@media (max-width: 560px) {
+  .auth-page,
+  .settings-panel,
+  .chat-messages,
+  .chat-header,
+  .composer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .auth-panel {
+    padding: 22px;
+  }
+
+  .composer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .primary-action.compact,
+  .danger-button {
+    width: 100%;
+  }
 }
 </style>
