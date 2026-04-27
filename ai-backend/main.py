@@ -9,7 +9,7 @@ import sqlite3
 import socket
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -239,7 +239,7 @@ def validate_base_url(base_url: str) -> str:
     return value
 
 
-def resolve_model_config(data: ChatRequest) -> tuple[str, str]:
+def resolve_model_config(data: ChatRequest) -> Tuple[str, str]:
     provider = data.provider.strip().lower()
     if provider in PROVIDER_DEFAULTS:
         defaults = PROVIDER_DEFAULTS[provider]
