@@ -1,11 +1,27 @@
 <template>
   <div class="app-shell">
     <main v-if="!currentUser" class="auth-page">
+      <section class="hero-panel">
+        <div class="brand-mark">
+          <span>AI</span>
+        </div>
+        <p class="eyebrow">Private model gateway</p>
+        <h1>把你的 API Key 接入一个高级 AI 工作台</h1>
+        <p class="hero-copy">登录后选择模型服务，使用自己的密钥发起流式对话。密钥只保存在当前浏览器，后端只做鉴权和转发。</p>
+        <div class="capability-row">
+          <span>OpenAI-compatible</span>
+          <span>Streaming chat</span>
+          <span>Local key storage</span>
+        </div>
+      </section>
+
       <section class="auth-panel">
-        <div class="auth-brand">
-          <p class="eyebrow">AI Chat</p>
-          <h1>登录后开始对话</h1>
-          <p>使用自己的 API Key 选择模型，聊天请求由后端安全转发。</p>
+        <div class="panel-topline">
+          <div>
+            <p class="eyebrow">Account access</p>
+            <h2>{{ authMode === 'login' ? '欢迎回来' : '创建账号' }}</h2>
+          </div>
+          <div class="status-pill">Secure</div>
         </div>
 
         <div class="auth-tabs" role="tablist">
@@ -16,7 +32,7 @@
         <form class="auth-form" @submit.prevent="submitAuth">
           <label>
             用户名
-            <input v-model.trim="authForm.username" autocomplete="username" placeholder="3-32位用户名" />
+            <input v-model.trim="authForm.username" autocomplete="username" placeholder="username" />
           </label>
           <label>
             密码
@@ -30,7 +46,7 @@
 
           <p v-if="authError" class="form-error">{{ authError }}</p>
           <button class="primary-action" type="submit" :disabled="authLoading">
-            {{ authLoading ? '处理中...' : authMode === 'login' ? '登录' : '注册并登录' }}
+            {{ authLoading ? '处理中...' : authMode === 'login' ? '进入工作台' : '注册并进入' }}
           </button>
         </form>
       </section>
@@ -38,34 +54,43 @@
 
     <main v-else class="chat-layout">
       <aside class="settings-panel">
-        <div class="panel-header">
+        <div class="panel-topline">
           <div>
-            <p class="eyebrow">当前账号</p>
+            <p class="eyebrow">Workspace</p>
             <h2>{{ currentUser.username }}</h2>
           </div>
-          <button class="ghost-button" @click="logout">退出</button>
+          <button class="ghost-button compact-button" @click="logout">退出</button>
         </div>
 
         <section class="settings-section">
-          <label class="field-label">模型服务</label>
-          <div class="provider-grid">
+          <div class="section-title">
+            <span>模型服务</span>
+            <span class="status-dot ready">Ready</span>
+          </div>
+          <div class="provider-stack">
             <button
               v-for="option in providerOptions"
               :key="option.value"
               :class="{ active: provider === option.value }"
               @click="provider = option.value"
             >
-              {{ option.label }}
+              <span>{{ option.label }}</span>
+              <small>{{ option.description }}</small>
             </button>
           </div>
         </section>
 
-        <section class="settings-section">
-          <label class="field-label" for="apiKey">API Key</label>
+        <section class="settings-section secret-section">
+          <div class="section-title">
+            <label for="apiKey">API Key</label>
+            <button class="link-button" type="button" @click="showApiKey = !showApiKey">
+              {{ showApiKey ? '隐藏' : '显示' }}
+            </button>
+          </div>
           <input
             id="apiKey"
             v-model.trim="activeSettings.apiKey"
-            type="password"
+            :type="showApiKey ? 'text' : 'password'"
             autocomplete="off"
             placeholder="sk-..."
           />
@@ -81,7 +106,10 @@
           <input id="modelName" v-model.trim="activeSettings.modelName" placeholder="gpt-4o-mini" />
         </section>
 
-        <p class="settings-note">API Key 仅保存在当前浏览器，不会保存到后端数据库。</p>
+        <div class="security-note">
+          <strong>Local only</strong>
+          <span>API Key 只保存在当前浏览器。后端会拒绝 HTTP、本机和内网 Base URL。</span>
+        </div>
       </aside>
 
       <section class="chat-panel">
@@ -90,16 +118,26 @@
             <p class="eyebrow">{{ activeProviderLabel }}</p>
             <h1>{{ activeSettings.modelName || '未选择模型' }}</h1>
           </div>
-          <button class="ghost-button" @click="clearHistory">清空对话</button>
+          <div class="header-actions">
+            <span class="connection-pill">{{ connectionLabel }}</span>
+            <button class="ghost-button compact-button" @click="clearHistory">清空</button>
+          </div>
         </header>
 
         <div ref="chatRef" class="chat-messages">
           <div v-if="messages.length === 0" class="empty-state">
-            <h2>开始新的对话</h2>
-            <p>填写 API Key 并确认模型后，输入问题即可发送。</p>
+            <div class="empty-orbit"></div>
+            <h2>Ready for intelligence</h2>
+            <p>配置 API Key 和模型后，开始一次安全的流式对话。</p>
+            <div class="prompt-chips">
+              <button type="button" @click="usePrompt('帮我把这个项目的部署步骤整理成清单')">部署清单</button>
+              <button type="button" @click="usePrompt('分析一下这个产品还可以优化哪些体验')">产品优化</button>
+              <button type="button" @click="usePrompt('写一个简洁的项目 README 结构')">README 结构</button>
+            </div>
           </div>
 
           <div v-for="(msg, index) in messages" :key="index" :class="['message-row', msg.role]">
+            <div class="message-meta">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</div>
             <div class="message-bubble">
               <div v-if="msg.done" v-html="msg.content || ''"></div>
               <div v-else class="streaming-text">{{ msg.content || '' }}</div>
@@ -107,7 +145,8 @@
           </div>
 
           <div v-if="loading" class="message-row ai">
-            <div class="message-bubble typing">思考中...</div>
+            <div class="message-meta">Assistant</div>
+            <div class="message-bubble typing">思考中<span></span><span></span><span></span></div>
           </div>
         </div>
 
@@ -123,7 +162,7 @@
             @keydown.enter.exact.prevent="send"
           ></textarea>
           <button v-if="streaming" type="button" class="danger-button" @click="stop">停止</button>
-          <button v-else class="primary-action compact" type="submit" :disabled="loading">发送</button>
+          <button v-else class="primary-action send-button" type="submit" :disabled="loading">发送</button>
         </form>
       </section>
     </main>
@@ -132,7 +171,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { marked } from 'marked'
+import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 
@@ -144,6 +183,7 @@ const providerOptions = [
   {
     value: 'deepseek',
     label: 'DeepSeek',
+    description: '速度快，适合中文与代码',
     defaults: {
       apiKey: '',
       baseUrl: 'https://api.deepseek.com',
@@ -153,6 +193,7 @@ const providerOptions = [
   {
     value: 'openai',
     label: 'OpenAI',
+    description: '通用推理与创作',
     defaults: {
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
@@ -162,6 +203,7 @@ const providerOptions = [
   {
     value: 'qwen',
     label: '通义千问',
+    description: '国内服务兼容模式',
     defaults: {
       apiKey: '',
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -171,6 +213,7 @@ const providerOptions = [
   {
     value: 'custom',
     label: '自定义',
+    description: 'OpenAI-compatible endpoint',
     defaults: {
       apiKey: '',
       baseUrl: '',
@@ -181,8 +224,17 @@ const providerOptions = [
 
 hljs.configure({ ignoreUnescapedHTML: true })
 
-marked.setOptions({
-  highlight: (code) => hljs.highlightAuto(code).value,
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+  highlight(code) {
+    try {
+      return hljs.highlightAuto(code).value
+    } catch {
+      return ''
+    }
+  },
 })
 
 window.copyCode = (btn) => {
@@ -196,16 +248,40 @@ window.copyCode = (btn) => {
 const renderMarkdown = (value) => {
   if (!value) return ''
   try {
-    let html = marked.parse(value)
+    let html = markdown.render(value)
     html = html.replace(
-      /<pre>/g,
-      '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">复制</button><pre>',
+      /<pre><code/g,
+      '<div class="code-block"><button class="copy-btn" onclick="copyCode(this)">复制</button><pre><code',
     )
-    html = html.replace(/<\/pre>/g, '</pre></div>')
+    html = html.replace(/<\/code><\/pre>/g, '</code></pre></div>')
     return html
   } catch {
-    return value
+    return escapeHtml(value)
   }
+}
+
+const escapeHtml = (value) => {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+const readJsonStorage = (key, fallback) => {
+  const saved = localStorage.getItem(key)
+  if (!saved) return fallback
+  try {
+    return JSON.parse(saved)
+  } catch {
+    localStorage.removeItem(key)
+    return fallback
+  }
+}
+
+const safeMessage = (error, fallback = '连接失败，请检查网络或稍后重试') => {
+  return typeof error?.message === 'string' && error.message ? error.message : fallback
 }
 
 const authMode = ref('login')
@@ -213,11 +289,11 @@ const authLoading = ref(false)
 const authError = ref('')
 const authForm = reactive({ username: '', password: '' })
 const token = ref(localStorage.getItem(AUTH_TOKEN_KEY) || '')
-const savedUser = localStorage.getItem(AUTH_USER_KEY)
-const currentUser = ref(savedUser ? JSON.parse(savedUser) : null)
+const currentUser = ref(readJsonStorage(AUTH_USER_KEY, null))
 
 const provider = ref('deepseek')
 const settings = ref(buildDefaultSettings())
+const showApiKey = ref(false)
 const text = ref('')
 const messages = ref([])
 const loading = ref(false)
@@ -227,9 +303,14 @@ const chatRef = ref(null)
 const textareaRef = ref(null)
 let abortController = null
 
-const activeSettings = computed(() => settings.value[provider.value])
+const activeSettings = computed(() => settings.value[provider.value] || settings.value.deepseek)
 const activeProviderLabel = computed(() => {
   return providerOptions.find((item) => item.value === provider.value)?.label || '自定义'
+})
+const connectionLabel = computed(() => {
+  if (!activeSettings.value.apiKey) return 'Missing API Key'
+  if (!activeSettings.value.baseUrl || !activeSettings.value.modelName) return 'Incomplete'
+  return 'Configured'
 })
 
 function buildDefaultSettings() {
@@ -276,7 +357,7 @@ async function submitAuth() {
     })
     setSession(payload.token, payload.user)
   } catch (error) {
-    authError.value = error.message
+    authError.value = safeMessage(error, '登录失败，请稍后重试')
   } finally {
     authLoading.value = false
   }
@@ -310,19 +391,18 @@ function logout() {
 }
 
 function loadUserData() {
-  const savedSettings = localStorage.getItem(userStorageKey('model-settings'))
   const mergedSettings = buildDefaultSettings()
-  if (savedSettings) {
-    const parsed = JSON.parse(savedSettings)
+  const parsedSettings = readJsonStorage(userStorageKey('model-settings'), null)
+  if (parsedSettings && typeof parsedSettings === 'object') {
     for (const key of Object.keys(mergedSettings)) {
-      mergedSettings[key] = { ...mergedSettings[key], ...(parsed[key] || {}) }
+      mergedSettings[key] = { ...mergedSettings[key], ...(parsedSettings[key] || {}) }
     }
   }
   settings.value = mergedSettings
 
-  provider.value = localStorage.getItem(userStorageKey('selected-provider')) || 'deepseek'
-  const savedMessages = localStorage.getItem(userStorageKey('chat-messages'))
-  messages.value = savedMessages ? JSON.parse(savedMessages) : []
+  const savedProvider = localStorage.getItem(userStorageKey('selected-provider'))
+  provider.value = providerOptions.some((item) => item.value === savedProvider) ? savedProvider : 'deepseek'
+  messages.value = readJsonStorage(userStorageKey('chat-messages'), [])
 }
 
 watch(
@@ -366,6 +446,11 @@ function clearHistory() {
   errorMsg.value = ''
 }
 
+function usePrompt(prompt) {
+  text.value = prompt
+  nextTick(autoResize)
+}
+
 function stop() {
   if (abortController) abortController.abort()
   streaming.value = false
@@ -385,6 +470,29 @@ function validateChatSettings() {
   return ''
 }
 
+function handleSseLine(line, aiMsg) {
+  if (!line.startsWith('data: ')) return
+  const raw = line.slice(6)
+  let payload = null
+  try {
+    payload = JSON.parse(raw)
+  } catch (error) {
+    if (raw) {
+      aiMsg.raw += raw
+      aiMsg.content = aiMsg.raw
+    }
+    return
+  }
+
+  if (payload.type === 'error') {
+    throw new Error(payload.content || '模型服务连接失败')
+  }
+  if (payload.type === 'chunk') {
+    aiMsg.raw += payload.content || ''
+    aiMsg.content = aiMsg.raw
+  }
+}
+
 async function send() {
   const userInput = text.value.trim()
   if (!userInput || loading.value) return
@@ -399,7 +507,7 @@ async function send() {
   if (textareaRef.value) textareaRef.value.style.height = 'auto'
   errorMsg.value = ''
 
-  messages.value.push({ role: 'user', content: userInput, done: true })
+  messages.value.push({ role: 'user', content: escapeHtml(userInput), done: true })
   const aiMsg = { role: 'ai', content: '', raw: '', done: false }
   messages.value.push(aiMsg)
 
@@ -447,19 +555,18 @@ async function send() {
       buffer = lines.pop()
 
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          aiMsg.raw += line.slice(6)
-          aiMsg.content = aiMsg.raw
-          messages.value = [...messages.value]
-          scrollToBottom()
-        }
+        handleSseLine(line, aiMsg)
+        messages.value = [...messages.value]
+        scrollToBottom()
       }
     }
   } catch (error) {
-    if (error.name !== 'AbortError') {
-      errorMsg.value = error.message || '连接失败，请检查网络或稍后重试'
+    const errorName = error?.name
+    const errorMessage = safeMessage(error)
+    if (errorName !== 'AbortError') {
+      errorMsg.value = errorMessage
       messages.value.splice(-2, 2)
-      if (error.message.includes('登录')) logout()
+      if (errorMessage.includes('登录')) logout()
     }
   } finally {
     loading.value = false
@@ -486,9 +593,9 @@ onMounted(() => {
 
 body {
   margin: 0;
-  background: #eef1f5;
-  color: #172033;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: #070a12;
+  color: #eef4ff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
 }
 
 button,
@@ -503,82 +610,155 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.62;
+  opacity: 0.58;
 }
 
 .app-shell {
   min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(80, 187, 255, 0.22), transparent 34%),
+    radial-gradient(circle at 82% 0%, rgba(145, 92, 255, 0.24), transparent 34%),
+    linear-gradient(135deg, #070a12 0%, #0a1020 44%, #101827 100%);
 }
 
 .auth-page {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(380px, 460px);
+  gap: 36px;
+  align-items: center;
+  padding: clamp(24px, 6vw, 76px);
+}
+
+.hero-panel {
+  max-width: 760px;
+}
+
+.brand-mark {
+  width: 64px;
+  height: 64px;
+  display: grid;
   place-items: center;
-  padding: 24px;
-  background: #e9edf3;
+  border: 1px solid rgba(144, 205, 255, 0.45);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(70, 144, 255, 0.22), rgba(255, 255, 255, 0.08));
+  box-shadow: 0 0 40px rgba(78, 168, 255, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  color: #dff3ff;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #83d8ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-panel .eyebrow {
+  margin-top: 28px;
+}
+
+.hero-panel h1 {
+  max-width: 720px;
+  margin: 0;
+  font-size: clamp(42px, 6vw, 76px);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.hero-copy {
+  max-width: 640px;
+  margin: 24px 0 0;
+  color: #a8b7d8;
+  font-size: 18px;
+  line-height: 1.75;
+}
+
+.capability-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 34px;
+}
+
+.capability-row span,
+.status-pill,
+.connection-pill,
+.status-dot {
+  border: 1px solid rgba(130, 216, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #d5e8ff;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.auth-panel,
+.settings-panel,
+.chat-panel {
+  border: 1px solid rgba(143, 166, 214, 0.22);
+  background: rgba(11, 17, 31, 0.78);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(22px);
 }
 
 .auth-panel {
-  width: min(440px, 100%);
-  background: #ffffff;
-  border: 1px solid #d8dee8;
-  border-radius: 8px;
+  border-radius: 22px;
   padding: 28px;
-  box-shadow: 0 18px 45px rgba(23, 32, 51, 0.10);
 }
 
-.auth-brand h1,
+.panel-topline,
+.chat-header,
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-topline h2,
 .chat-header h1,
-.panel-header h2,
 .empty-state h2 {
   margin: 0;
   letter-spacing: 0;
 }
 
-.auth-brand h1 {
-  font-size: 28px;
-  line-height: 1.2;
-}
-
-.auth-brand p:last-child {
-  margin: 10px 0 0;
-  color: #5c667a;
-  line-height: 1.6;
-}
-
-.eyebrow {
-  margin: 0 0 6px;
-  color: #53627c;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
+.panel-topline h2 {
+  font-size: 24px;
 }
 
 .auth-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
-  margin: 26px 0 18px;
-  padding: 4px;
-  background: #eef1f5;
-  border-radius: 8px;
+  margin: 28px 0 18px;
+  padding: 5px;
+  border: 1px solid rgba(143, 166, 214, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .auth-tabs button,
-.provider-grid button {
+.provider-stack button,
+.prompt-chips button {
   border: 0;
-  border-radius: 6px;
+  color: #a8b7d8;
   background: transparent;
-  color: #53627c;
-  min-height: 38px;
-  font-weight: 700;
 }
 
-.auth-tabs button.active,
-.provider-grid button.active {
-  background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.12);
+.auth-tabs button {
+  min-height: 42px;
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+.auth-tabs button.active {
+  background: linear-gradient(135deg, rgba(42, 135, 255, 0.92), rgba(126, 87, 255, 0.85));
+  color: #ffffff;
 }
 
 .auth-form,
@@ -588,211 +768,309 @@ button:disabled {
 }
 
 .auth-form label,
-.settings-section label {
+.field-label,
+.section-title label,
+.section-title span:first-child {
+  color: #d9e6ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.auth-form label {
   display: grid;
-  gap: 7px;
-  color: #344055;
-  font-size: 14px;
-  font-weight: 700;
+  gap: 8px;
 }
 
 input,
 textarea {
   width: 100%;
-  border: 1px solid #cbd3df;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #172033;
+  border: 1px solid rgba(143, 166, 214, 0.24);
+  border-radius: 14px;
+  background: rgba(5, 10, 20, 0.72);
+  color: #eef4ff;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
 }
 
 input {
-  min-height: 44px;
-  padding: 10px 12px;
+  min-height: 46px;
+  padding: 11px 13px;
 }
 
 textarea {
-  min-height: 48px;
+  min-height: 52px;
   max-height: 180px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   resize: none;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #63708d;
 }
 
 input:focus,
 textarea:focus {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+  border-color: rgba(118, 213, 255, 0.78);
+  background: rgba(9, 16, 31, 0.92);
+  box-shadow: 0 0 0 4px rgba(53, 159, 255, 0.15);
 }
 
 .primary-action,
 .ghost-button,
 .danger-button {
   border: 0;
-  border-radius: 8px;
-  min-height: 42px;
-  padding: 0 16px;
-  font-weight: 800;
+  border-radius: 14px;
+  min-height: 44px;
+  padding: 0 18px;
+  font-weight: 900;
 }
 
 .primary-action {
-  background: #2563eb;
+  background: linear-gradient(135deg, #46a5ff, #7c5cff);
   color: #ffffff;
+  box-shadow: 0 16px 38px rgba(72, 123, 255, 0.26);
 }
 
 .primary-action:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-
-.primary-action.compact,
-.danger-button {
-  min-width: 78px;
-  height: 48px;
+  filter: brightness(1.08);
 }
 
 .ghost-button {
-  background: #eef1f5;
-  color: #243044;
+  border: 1px solid rgba(143, 166, 214, 0.22);
+  background: rgba(255, 255, 255, 0.07);
+  color: #dce8ff;
 }
 
 .ghost-button:hover {
-  background: #e1e7f0;
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.compact-button,
+.danger-button,
+.send-button {
+  min-height: 42px;
 }
 
 .danger-button {
-  background: #dc2626;
+  background: #ef4444;
   color: #ffffff;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: #83d8ff;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .form-error,
 .chat-error {
   margin: 0;
-  color: #b91c1c;
+  color: #ff9a9a;
   font-size: 14px;
 }
 
 .chat-layout {
-  height: 100vh;
+  min-height: 100vh;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  background: #eef1f5;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px;
 }
 
 .settings-panel {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 24px;
+  min-height: calc(100vh - 32px);
+  border-radius: 24px;
   padding: 22px;
-  border-right: 1px solid #d8dee8;
-  background: #f8fafc;
   overflow-y: auto;
 }
 
-.panel-header,
-.chat-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.panel-header h2 {
-  font-size: 20px;
-}
-
-.provider-grid {
+.provider-stack {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 6px;
-  background: #e9edf3;
-  border-radius: 8px;
+  gap: 10px;
 }
 
-.field-label {
-  color: #344055;
-  font-size: 13px;
-  font-weight: 800;
+.provider-stack button {
+  display: grid;
+  gap: 4px;
+  min-height: 68px;
+  padding: 13px;
+  text-align: left;
+  border: 1px solid rgba(143, 166, 214, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
 }
 
-.settings-note {
-  margin: auto 0 0;
-  color: #667085;
+.provider-stack button span {
+  color: #eef4ff;
+  font-weight: 900;
+}
+
+.provider-stack button small {
+  color: #8fa1c6;
+  line-height: 1.35;
+}
+
+.provider-stack button.active {
+  border-color: rgba(118, 213, 255, 0.65);
+  background: linear-gradient(135deg, rgba(50, 143, 255, 0.22), rgba(126, 87, 255, 0.18));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 14px 36px rgba(40, 120, 255, 0.15);
+}
+
+.status-dot {
+  padding: 5px 9px;
+}
+
+.status-dot.ready {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.28);
+}
+
+.security-note {
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+  padding: 14px;
+  border: 1px solid rgba(134, 239, 172, 0.20);
+  border-radius: 16px;
+  background: rgba(17, 112, 74, 0.12);
+  color: #93a6c9;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.55;
+}
+
+.security-note strong {
+  color: #b8ffd2;
 }
 
 .chat-panel {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  min-height: calc(100vh - 32px);
+  border-radius: 24px;
+  overflow: hidden;
 }
 
 .chat-header {
-  min-height: 74px;
-  padding: 16px 22px;
-  border-bottom: 1px solid #d8dee8;
+  min-height: 76px;
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(143, 166, 214, 0.16);
 }
 
 .chat-header h1 {
-  font-size: 20px;
+  font-size: 22px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 22px;
+  padding: 24px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 34px 34px;
 }
 
 .empty-state {
-  height: 100%;
+  min-height: 100%;
   display: grid;
   place-content: center;
+  justify-items: center;
   text-align: center;
-  color: #667085;
+  color: #93a6c9;
+}
+
+.empty-orbit {
+  width: 94px;
+  height: 94px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(131, 216, 255, 0.35);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(131, 216, 255, 0.95) 0 8px, transparent 9px),
+    radial-gradient(circle at 70% 28%, rgba(126, 87, 255, 0.9) 0 7px, transparent 8px),
+    rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 60px rgba(74, 168, 255, 0.18);
 }
 
 .empty-state h2 {
-  color: #172033;
-  font-size: 24px;
+  color: #eef4ff;
+  font-size: 28px;
 }
 
 .empty-state p {
+  max-width: 520px;
   margin: 10px 0 0;
+  line-height: 1.7;
+}
+
+.prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.prompt-chips button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(143, 166, 214, 0.20);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .message-row {
-  display: flex;
-  margin: 14px 0;
+  display: grid;
+  gap: 7px;
+  margin: 18px 0;
 }
 
 .message-row.user {
-  justify-content: flex-end;
+  justify-items: end;
 }
 
 .message-row.ai {
-  justify-content: flex-start;
+  justify-items: start;
+}
+
+.message-meta {
+  color: #7283a5;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .message-bubble {
-  max-width: min(760px, 78%);
-  padding: 13px 16px;
-  border-radius: 8px;
-  line-height: 1.65;
+  max-width: min(820px, 78%);
+  padding: 15px 17px;
+  border-radius: 18px;
+  line-height: 1.72;
   word-break: break-word;
 }
 
 .message-row.user .message-bubble {
-  background: #2563eb;
+  background: linear-gradient(135deg, #328fff, #745cff);
   color: #ffffff;
+  box-shadow: 0 18px 44px rgba(58, 115, 255, 0.24);
 }
 
 .message-row.ai .message-bubble {
-  background: #f4f6fa;
-  border: 1px solid #e3e8f0;
-  color: #172033;
+  border: 1px solid rgba(143, 166, 214, 0.18);
+  background: rgba(255, 255, 255, 0.07);
+  color: #dfebff;
 }
 
 .message-bubble p {
@@ -803,13 +1081,17 @@ textarea:focus {
   margin-bottom: 0;
 }
 
+.message-bubble a {
+  color: #83d8ff;
+}
+
 .message-bubble pre {
   overflow-x: auto;
-  margin: 10px 0;
-  padding: 14px;
-  border-radius: 8px;
-  background: #111827;
-  color: #f8fafc;
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px solid rgba(143, 166, 214, 0.16);
+  border-radius: 14px;
+  background: #050914;
 }
 
 .message-bubble code {
@@ -826,8 +1108,8 @@ textarea:focus {
   top: 8px;
   right: 8px;
   border: 0;
-  border-radius: 6px;
-  background: #334155;
+  border-radius: 8px;
+  background: rgba(143, 166, 214, 0.20);
   color: #ffffff;
   min-height: 28px;
   padding: 0 10px;
@@ -839,33 +1121,50 @@ textarea:focus {
   white-space: pre-wrap;
 }
 
+.typing span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: #83d8ff;
+}
+
 .chat-error {
-  padding: 0 22px 12px;
+  padding: 0 24px 12px;
 }
 
 .composer {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-end;
-  padding: 16px 22px;
-  border-top: 1px solid #d8dee8;
-  background: #ffffff;
+  padding: 18px 22px;
+  border-top: 1px solid rgba(143, 166, 214, 0.16);
+  background: rgba(7, 10, 18, 0.72);
 }
 
-@media (max-width: 860px) {
-  .chat-layout {
-    height: auto;
-    min-height: 100vh;
+.send-button,
+.danger-button {
+  width: 86px;
+  height: 52px;
+}
+
+@media (max-width: 980px) {
+  .auth-page {
     grid-template-columns: 1fr;
   }
 
-  .settings-panel {
-    border-right: 0;
-    border-bottom: 1px solid #d8dee8;
+  .hero-panel {
+    max-width: 100%;
   }
 
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-panel,
   .chat-panel {
-    min-height: 70vh;
+    min-height: auto;
   }
 
   .message-bubble {
@@ -873,26 +1172,33 @@ textarea:focus {
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 620px) {
   .auth-page,
-  .settings-panel,
-  .chat-messages,
+  .chat-layout {
+    padding: 12px;
+  }
+
+  .auth-panel,
+  .settings-panel {
+    padding: 18px;
+  }
+
+  .hero-panel h1 {
+    font-size: 40px;
+  }
+
   .chat-header,
   .composer {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-
-  .auth-panel {
-    padding: 22px;
-  }
-
-  .composer {
-    flex-direction: column;
     align-items: stretch;
+    flex-direction: column;
   }
 
-  .primary-action.compact,
+  .header-actions,
+  .composer {
+    width: 100%;
+  }
+
+  .send-button,
   .danger-button {
     width: 100%;
   }

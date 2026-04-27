@@ -1,13 +1,16 @@
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import sqlite3
+import socket
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -29,8 +32,25 @@ app.add_middleware(
 DB_PATH = Path(__file__).with_name("app.db")
 TOKEN_TTL_DAYS = 7
 RATE_LIMIT = 60
+MAX_HISTORY_MESSAGES = 20
+MAX_SESSIONS = 200
+PROVIDER_DEFAULTS = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model_name": "deepseek-chat",
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "model_name": "gpt-4o-mini",
+    },
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model_name": "qwen-plus",
+    },
+}
+BLOCKED_HOSTS = {"localhost", "localhost.localdomain"}
 rate_store = defaultdict(lambda: {"count": 0, "reset_at": 0})
-session_histories = defaultdict(list)
+session_histories = OrderedDict()
 
 
 class AuthRequest(BaseModel):
@@ -107,10 +127,13 @@ def create_token(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=TOKEN_TTL_DAYS)
+    now_iso = now.isoformat()
     with get_db() as conn:
+        conn.execute("DELETE FROM auth_tokens WHERE expires_at <= ?", (now_iso,))
+        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
         conn.execute(
             "INSERT INTO auth_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-            (token, user_id, expires_at.isoformat(), now.isoformat()),
+            (token, user_id, expires_at.isoformat(), now_iso),
         )
     return token
 
@@ -159,6 +182,84 @@ def check_rate_limit(user_id: int) -> bool:
         return False
     record["count"] += 1
     return True
+
+
+def get_session_history(session_key: str) -> list:
+    history = session_histories.get(session_key)
+    if history is None:
+        history = []
+        session_histories[session_key] = history
+    else:
+        session_histories.move_to_end(session_key)
+
+    while len(session_histories) > MAX_SESSIONS:
+        session_histories.popitem(last=False)
+    return history
+
+
+def trim_history(history: list):
+    if len(history) > MAX_HISTORY_MESSAGES:
+        del history[:-MAX_HISTORY_MESSAGES]
+
+
+def is_blocked_ip(ip_text: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return True
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def validate_base_url(base_url: str) -> str:
+    value = base_url.strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Base URL 必须是有效的 HTTPS 地址")
+
+    hostname = parsed.hostname.lower()
+    if hostname in BLOCKED_HOSTS:
+        raise HTTPException(status_code=400, detail="Base URL 不允许指向本机或内网地址")
+
+    try:
+        addresses = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Base URL 域名无法解析")
+
+    for address in addresses:
+        if is_blocked_ip(address[4][0]):
+            raise HTTPException(status_code=400, detail="Base URL 不允许指向本机或内网地址")
+
+    return value
+
+
+def resolve_model_config(data: ChatRequest) -> tuple[str, str]:
+    provider = data.provider.strip().lower()
+    if provider in PROVIDER_DEFAULTS:
+        defaults = PROVIDER_DEFAULTS[provider]
+        base_url = data.base_url.strip() or defaults["base_url"]
+        model_name = data.model_name.strip() or defaults["model_name"]
+    elif provider == "custom":
+        base_url = data.base_url.strip()
+        model_name = data.model_name.strip()
+    else:
+        raise HTTPException(status_code=400, detail="不支持的模型服务")
+
+    if not base_url or not model_name:
+        raise HTTPException(status_code=400, detail="请填写 Base URL 和模型名称")
+
+    return validate_base_url(base_url), model_name
+
+
+def sse_payload(event_type: str, content: str) -> str:
+    payload = json.dumps({"type": event_type, "content": content}, ensure_ascii=False)
+    return f"data: {payload}\n\n"
 
 
 @app.post("/auth/register")
@@ -220,15 +321,14 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="消息不能为空")
     if not data.api_key.strip():
         raise HTTPException(status_code=400, detail="请先填写当前模型的 API Key")
-    if not data.base_url.strip() or not data.model_name.strip():
-        raise HTTPException(status_code=400, detail="请填写 Base URL 和模型名称")
+    base_url, model_name = resolve_model_config(data)
 
     session_key = f'{user["id"]}:{data.session_id}'
-    history = session_histories[session_key]
+    history = get_session_history(session_key)
 
     def generate():
-        for chunk in stream_openai_compatible(data, history):
-            yield f"data: {chunk}\n\n"
+        for event_type, chunk in stream_openai_compatible(data, history, base_url, model_name):
+            yield sse_payload(event_type, chunk)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -240,7 +340,7 @@ def build_chat_url(base_url: str) -> str:
     return f"{value}/chat/completions"
 
 
-def stream_openai_compatible(data: ChatRequest, history: list):
+def stream_openai_compatible(data: ChatRequest, history: list, base_url: str, model_name: str):
     headers = {
         "Authorization": f"Bearer {data.api_key.strip()}",
         "Content-Type": "application/json",
@@ -248,7 +348,7 @@ def stream_openai_compatible(data: ChatRequest, history: list):
     prompt = data.message.strip()
     history.append({"role": "user", "content": prompt})
     payload = {
-        "model": data.model_name.strip(),
+        "model": model_name,
         "messages": history[-10:],
         "stream": True,
     }
@@ -256,7 +356,7 @@ def stream_openai_compatible(data: ChatRequest, history: list):
 
     try:
         with requests.post(
-            build_chat_url(data.base_url),
+            build_chat_url(base_url),
             headers=headers,
             json=payload,
             stream=True,
@@ -277,13 +377,18 @@ def stream_openai_compatible(data: ChatRequest, history: list):
                     content = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                     if content:
                         full_reply += content
-                        yield content
+                        yield "chunk", content
                 except Exception:
                     continue
+    except requests.RequestException as e:
+        print(f"chat proxy error: {type(e).__name__}: {e}")
+        yield "error", "模型服务连接失败，请检查 API Key、Base URL 或模型名称"
     except Exception as e:
-        yield f"\n\n[错误: {e}]"
+        print(f"chat unexpected error: {type(e).__name__}: {e}")
+        yield "error", "服务暂时不可用，请稍后重试"
 
     history.append({"role": "assistant", "content": full_reply})
+    trim_history(history)
 
 
 init_db()
