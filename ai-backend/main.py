@@ -67,6 +67,21 @@ class ChatRequest(BaseModel):
     session_id: str = "default"
 
 
+class AgentModelConfig(BaseModel):
+    provider: str
+    api_key: str
+    base_url: str
+    model_name: str
+
+
+class AgentTaskCreate(AgentModelConfig):
+    goal: str
+
+
+class AgentTaskAction(AgentModelConfig):
+    pass
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -93,6 +108,54 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                status TEXT NOT NULL,
+                plan TEXT NOT NULL DEFAULT '',
+                final_result TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                step_order INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                input TEXT NOT NULL DEFAULT '',
+                output TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (task_id) REFERENCES agent_tasks (id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                memory_key TEXT NOT NULL,
+                memory_value TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, memory_key),
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
             """
@@ -262,6 +325,251 @@ def sse_payload(event_type: str, content: str) -> str:
     return f"data: {payload}\n\n"
 
 
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def model_config_from_action(data: AgentModelConfig) -> ChatRequest:
+    return ChatRequest(
+        provider=data.provider,
+        message="",
+        api_key=data.api_key,
+        base_url=data.base_url,
+        model_name=data.model_name,
+    )
+
+
+def call_model_once(data: AgentModelConfig, messages: list) -> str:
+    if not data.api_key.strip():
+        raise HTTPException(status_code=400, detail="请先填写当前模型的 API Key")
+    chat_config = model_config_from_action(data)
+    base_url, model_name = resolve_model_config(chat_config)
+    headers = {
+        "Authorization": f"Bearer {data.api_key.strip()}",
+        "Content-Type": "application/json",
+    }
+    payload = {"model": model_name, "messages": messages, "stream": False}
+    try:
+        res = requests.post(
+            build_chat_url(base_url),
+            headers=headers,
+            json=payload,
+            timeout=90,
+        )
+        res.raise_for_status()
+        body = res.json()
+        return body.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    except requests.RequestException as e:
+        print(f"agent model error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail="模型服务连接失败，请检查 API Key、Base URL 或模型名称")
+    except Exception as e:
+        print(f"agent unexpected error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail="智能体服务暂时不可用")
+
+
+def fallback_plan(goal: str) -> dict:
+    title = goal.strip()[:28] or "智能体任务"
+    return {
+        "title": title,
+        "plan": "先理解目标，再拆解执行步骤，最后汇总交付结果。",
+        "steps": [
+            {"title": "理解目标与约束", "tool_name": "memory_reader", "input": goal},
+            {"title": "生成执行方案", "tool_name": "document_generator", "input": goal},
+            {"title": "汇总最终结果", "tool_name": "text_summarizer", "input": goal},
+        ],
+    }
+
+
+def parse_plan(raw_text: str, goal: str) -> dict:
+    try:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        payload = json.loads(raw_text[start : end + 1] if start >= 0 and end >= 0 else raw_text)
+        steps = payload.get("steps") or []
+        clean_steps = []
+        for item in steps[:6]:
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            tool_name = str(item.get("tool_name") or "document_generator").strip()
+            if tool_name not in TOOL_REGISTRY:
+                tool_name = "document_generator"
+            clean_steps.append(
+                {
+                    "title": title[:80],
+                    "tool_name": tool_name,
+                    "input": str(item.get("input") or goal).strip(),
+                }
+            )
+        if clean_steps:
+            return {
+                "title": str(payload.get("title") or goal[:28] or "智能体任务").strip()[:60],
+                "plan": str(payload.get("plan") or raw_text).strip(),
+                "steps": clean_steps,
+            }
+    except Exception:
+        pass
+    return fallback_plan(goal)
+
+
+def create_agent_plan(data: AgentTaskCreate, user: dict) -> dict:
+    prompt = f"""
+你是一个半自动个人全能 AI 智能体。请为用户目标生成安全、可确认、只执行文本型任务的计划。
+不要包含删除文件、提交代码、部署服务器、发送邮件、支付、下单等高风险动作。
+只能使用这些工具名：web_search_placeholder, text_summarizer, document_generator, memory_reader。
+请只返回 JSON，不要 Markdown。
+
+用户：{user["username"]}
+目标：{data.goal}
+
+JSON 格式：
+{{
+  "title": "简短任务标题",
+  "plan": "计划说明",
+  "steps": [
+    {{"title": "步骤标题", "tool_name": "document_generator", "input": "该步骤要处理的内容"}}
+  ]
+}}
+"""
+    raw = call_model_once(
+        data,
+        [
+            {"role": "system", "content": "你是安全、谨慎、可审计的半自动 AI 智能体规划器。"},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return parse_plan(raw, data.goal)
+
+
+def tool_web_search_placeholder(step: sqlite3.Row, task: sqlite3.Row, user: dict) -> str:
+    return "联网搜索工具尚未开放。当前步骤已记录为待人工搜索，可先基于已有上下文继续分析。"
+
+
+def tool_memory_reader(step: sqlite3.Row, task: sqlite3.Row, user: dict) -> str:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT memory_key, memory_value FROM agent_memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 8",
+            (user["id"],),
+        ).fetchall()
+    if not rows:
+        return "暂无长期记忆。将使用当前任务目标和步骤上下文继续。"
+    return "\n".join([f"- {row['memory_key']}: {row['memory_value']}" for row in rows])
+
+
+def tool_text_summarizer(step: sqlite3.Row, task: sqlite3.Row, user: dict, data: AgentModelConfig) -> str:
+    prior = get_step_context(task["id"])
+    return call_model_once(
+        data,
+        [
+            {"role": "system", "content": "你是严谨的总结助手，只基于给定内容输出清晰结论。"},
+            {
+                "role": "user",
+                "content": f"任务目标：{task['goal']}\n当前步骤：{step['title']}\n步骤输入：{step['input']}\n已有上下文：\n{prior}\n\n请总结可执行结论。",
+            },
+        ],
+    )
+
+
+def tool_document_generator(step: sqlite3.Row, task: sqlite3.Row, user: dict, data: AgentModelConfig) -> str:
+    prior = get_step_context(task["id"])
+    return call_model_once(
+        data,
+        [
+            {"role": "system", "content": "你是个人全能 AI 智能体，擅长把目标转成结构化交付物。"},
+            {
+                "role": "user",
+                "content": f"任务目标：{task['goal']}\n当前步骤：{step['title']}\n步骤输入：{step['input']}\n已有步骤结果：\n{prior}\n\n请完成该步骤，输出 Markdown。",
+            },
+        ],
+    )
+
+
+TOOL_REGISTRY = {
+    "web_search_placeholder": tool_web_search_placeholder,
+    "text_summarizer": tool_text_summarizer,
+    "document_generator": tool_document_generator,
+    "memory_reader": tool_memory_reader,
+}
+
+
+def get_step_context(task_id: int) -> str:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT title, output FROM agent_steps
+            WHERE task_id = ? AND status = 'completed'
+            ORDER BY step_order
+            """,
+            (task_id,),
+        ).fetchall()
+    if not rows:
+        return "暂无已完成步骤。"
+    return "\n\n".join([f"## {row['title']}\n{row['output']}" for row in rows])
+
+
+def serialize_task(task: sqlite3.Row, steps: list) -> dict:
+    return {
+        "id": task["id"],
+        "title": task["title"],
+        "goal": task["goal"],
+        "status": task["status"],
+        "plan": task["plan"],
+        "final_result": task["final_result"],
+        "created_at": task["created_at"],
+        "updated_at": task["updated_at"],
+        "steps": [
+            {
+                "id": step["id"],
+                "step_order": step["step_order"],
+                "title": step["title"],
+                "tool_name": step["tool_name"],
+                "status": step["status"],
+                "input": step["input"],
+                "output": step["output"],
+                "error": step["error"],
+                "created_at": step["created_at"],
+                "updated_at": step["updated_at"],
+            }
+            for step in steps
+        ],
+    }
+
+
+def fetch_task_for_user(task_id: int, user_id: int) -> Tuple[sqlite3.Row, list]:
+    with get_db() as conn:
+        task = conn.execute(
+            "SELECT * FROM agent_tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        steps = conn.execute(
+            "SELECT * FROM agent_steps WHERE task_id = ? ORDER BY step_order",
+            (task_id,),
+        ).fetchall()
+    return task, steps
+
+
+def complete_task_if_done(task_id: int, data: AgentModelConfig, user: dict):
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    if not steps or any(step["status"] != "completed" for step in steps):
+        return
+    context = get_step_context(task_id)
+    final_result = call_model_once(
+        data,
+        [
+            {"role": "system", "content": "你是个人全能 AI 智能体，请把所有步骤结果汇总成最终交付物。"},
+            {"role": "user", "content": f"任务目标：{task['goal']}\n步骤结果：\n{context}\n\n请输出最终结果，使用 Markdown。"},
+        ],
+    )
+    current = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_tasks SET status = ?, final_result = ?, updated_at = ? WHERE id = ?",
+            ("completed", final_result, current, task_id),
+        )
+
+
 @app.post("/auth/register")
 def register(data: AuthRequest):
     username = normalize_username(data.username)
@@ -310,6 +618,180 @@ def login(data: AuthRequest):
 @app.get("/auth/me")
 def me(user=Depends(get_current_user)):
     return {"user": user}
+
+
+@app.post("/agent/tasks")
+def create_agent_task(data: AgentTaskCreate, user=Depends(get_current_user)):
+    goal = data.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="任务目标不能为空")
+
+    plan = create_agent_plan(data, user)
+    current = now_iso()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO agent_tasks (user_id, title, goal, status, plan, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user["id"],
+                plan["title"],
+                goal,
+                "waiting_confirmation",
+                plan["plan"],
+                current,
+                current,
+            ),
+        )
+        task_id = cursor.lastrowid
+        for index, step in enumerate(plan["steps"], start=1):
+            conn.execute(
+                """
+                INSERT INTO agent_steps
+                (task_id, step_order, title, tool_name, status, input, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    index,
+                    step["title"],
+                    step["tool_name"],
+                    "pending",
+                    step.get("input") or goal,
+                    current,
+                    current,
+                ),
+            )
+
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    return {"task": serialize_task(task, steps)}
+
+
+@app.get("/agent/tasks")
+def list_agent_tasks(user=Depends(get_current_user)):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, goal, status, plan, final_result, created_at, updated_at
+            FROM agent_tasks
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 50
+            """,
+            (user["id"],),
+        ).fetchall()
+    return {
+        "tasks": [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "goal": row["goal"],
+                "status": row["status"],
+                "plan": row["plan"],
+                "final_result": row["final_result"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/agent/tasks/{task_id}")
+def get_agent_task(task_id: int, user=Depends(get_current_user)):
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    return {"task": serialize_task(task, steps)}
+
+
+@app.post("/agent/tasks/{task_id}/confirm")
+def confirm_agent_task(task_id: int, user=Depends(get_current_user)):
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    if task["status"] != "waiting_confirmation":
+        raise HTTPException(status_code=400, detail="当前任务不需要确认")
+    current = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?",
+            ("running", current, task_id),
+        )
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    return {"task": serialize_task(task, steps)}
+
+
+@app.post("/agent/tasks/{task_id}/cancel")
+def cancel_agent_task(task_id: int, user=Depends(get_current_user)):
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    if task["status"] in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail="任务已结束")
+    current = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?",
+            ("failed", current, task_id),
+        )
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    return {"task": serialize_task(task, steps)}
+
+
+@app.post("/agent/tasks/{task_id}/run")
+def run_agent_task(task_id: int, data: AgentTaskAction, user=Depends(get_current_user)):
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    if task["status"] == "waiting_confirmation":
+        raise HTTPException(status_code=400, detail="请先确认执行此计划")
+    if task["status"] in ("completed", "failed"):
+        return {"task": serialize_task(task, steps)}
+    if task["status"] != "running":
+        raise HTTPException(status_code=400, detail="任务状态不允许执行")
+
+    next_step = next((step for step in steps if step["status"] == "pending"), None)
+    if not next_step:
+        complete_task_if_done(task_id, data, user)
+        task, steps = fetch_task_for_user(task_id, user["id"])
+        return {"task": serialize_task(task, steps)}
+
+    current = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_steps SET status = ?, updated_at = ? WHERE id = ?",
+            ("running", current, next_step["id"]),
+        )
+
+    try:
+        tool = TOOL_REGISTRY.get(next_step["tool_name"], tool_document_generator)
+        if next_step["tool_name"] in ("text_summarizer", "document_generator"):
+            output = tool(next_step, task, user, data)
+        else:
+            output = tool(next_step, task, user)
+        status = "completed"
+        error = ""
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"agent step error: {type(e).__name__}: {e}")
+        output = ""
+        status = "failed"
+        error = "该步骤执行失败，请调整任务后重试"
+
+    current = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE agent_steps
+            SET status = ?, output = ?, error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, output, error, current, next_step["id"]),
+        )
+        conn.execute(
+            "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?",
+            ("failed" if status == "failed" else "running", current, task_id),
+        )
+
+    if status == "completed":
+        complete_task_if_done(task_id, data, user)
+    task, steps = fetch_task_for_user(task_id, user["id"])
+    return {"task": serialize_task(task, steps)}
 
 
 @app.post("/chat")

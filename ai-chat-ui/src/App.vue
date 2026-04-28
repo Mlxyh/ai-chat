@@ -115,16 +115,131 @@
       <section class="chat-panel">
         <header class="chat-header">
           <div>
-            <p class="eyebrow">{{ activeProviderLabel }}</p>
-            <h1>{{ activeSettings.modelName || '未选择模型' }}</h1>
+            <p class="eyebrow">{{ viewMode === 'agent' ? 'Agent workspace' : activeProviderLabel }}</p>
+            <h1>{{ viewMode === 'agent' ? 'AI 超级智能体' : activeSettings.modelName || '未选择模型' }}</h1>
           </div>
           <div class="header-actions">
+            <div class="view-tabs">
+              <button :class="{ active: viewMode === 'agent' }" @click="viewMode = 'agent'">智能体任务</button>
+              <button :class="{ active: viewMode === 'chat' }" @click="viewMode = 'chat'">聊天</button>
+            </div>
             <span class="connection-pill">{{ connectionLabel }}</span>
-            <button class="ghost-button compact-button" @click="clearHistory">清空</button>
+            <button v-if="viewMode === 'chat'" class="ghost-button compact-button" @click="clearHistory">清空</button>
           </div>
         </header>
 
-        <div ref="chatRef" class="chat-messages">
+        <div v-if="viewMode === 'agent'" class="agent-workspace">
+          <section class="agent-create">
+            <div>
+              <p class="eyebrow">Mission control</p>
+              <h2>告诉智能体你要完成什么</h2>
+              <p>系统会先生成计划，等待你确认后再逐步执行文本型任务。</p>
+            </div>
+            <textarea
+              v-model="agentGoal"
+              rows="3"
+              placeholder="例如：帮我分析这个项目还能怎么优化，并输出开发任务清单"
+            ></textarea>
+            <p v-if="agentError" class="chat-error inline-error">{{ agentError }}</p>
+            <button class="primary-action" type="button" :disabled="agentLoading" @click="createAgentTask">
+              {{ agentLoading ? '正在规划...' : '创建智能体任务' }}
+            </button>
+          </section>
+
+          <section class="agent-board">
+            <aside class="task-list">
+              <div class="section-title">
+                <span>任务历史</span>
+                <button class="link-button" type="button" @click="loadAgentTasks">刷新</button>
+              </div>
+              <button
+                v-for="task in agentTasks"
+                :key="task.id"
+                :class="['task-card', { active: selectedTask?.id === task.id }]"
+                type="button"
+                @click="selectAgentTask(task.id)"
+              >
+                <span>{{ task.title }}</span>
+                <small>{{ task.status }}</small>
+              </button>
+              <p v-if="agentTasks.length === 0" class="muted-copy">暂无任务。创建一个目标开始。</p>
+            </aside>
+
+            <article v-if="selectedTask" class="task-detail">
+              <div class="task-detail-head">
+                <div>
+                  <p class="eyebrow">{{ selectedTask.status }}</p>
+                  <h2>{{ selectedTask.title }}</h2>
+                </div>
+                <div class="task-actions">
+                  <button
+                    v-if="selectedTask.status === 'waiting_confirmation'"
+                    class="primary-action compact-button"
+                    type="button"
+                    :disabled="agentLoading"
+                    @click="confirmAgentTask"
+                  >
+                    确认执行此计划
+                  </button>
+                  <button
+                    v-if="selectedTask.status === 'running'"
+                    class="primary-action compact-button"
+                    type="button"
+                    :disabled="agentLoading"
+                    @click="runAgentTask"
+                  >
+                    继续下一步
+                  </button>
+                  <button
+                    v-if="!['completed', 'failed'].includes(selectedTask.status)"
+                    class="ghost-button compact-button"
+                    type="button"
+                    :disabled="agentLoading"
+                    @click="cancelAgentTask"
+                  >
+                    取消任务
+                  </button>
+                </div>
+              </div>
+
+              <div class="mission-card">
+                <strong>目标</strong>
+                <p>{{ selectedTask.goal }}</p>
+              </div>
+              <div class="mission-card">
+                <strong>计划</strong>
+                <p>{{ selectedTask.plan }}</p>
+              </div>
+
+              <div class="timeline">
+                <div v-for="step in selectedTask.steps" :key="step.id" :class="['timeline-step', step.status]">
+                  <div class="step-index">{{ step.step_order }}</div>
+                  <div class="step-body">
+                    <div class="step-head">
+                      <strong>{{ step.title }}</strong>
+                      <span>{{ step.status }} · {{ step.tool_name }}</span>
+                    </div>
+                    <p v-if="step.input" class="muted-copy">{{ step.input }}</p>
+                    <div v-if="step.output" class="step-output" v-html="renderMarkdown(step.output)"></div>
+                    <p v-if="step.error" class="form-error">{{ step.error }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="selectedTask.final_result" class="final-result">
+                <p class="eyebrow">Final delivery</p>
+                <div v-html="renderMarkdown(selectedTask.final_result)"></div>
+              </div>
+            </article>
+
+            <article v-else class="task-detail empty-task">
+              <h2>等待任务</h2>
+              <p>创建任务后，智能体会在这里展示计划、步骤和最终交付物。</p>
+            </article>
+          </section>
+        </div>
+
+        <div v-else ref="chatRef" class="chat-messages">
           <div v-if="messages.length === 0" class="empty-state">
             <div class="empty-orbit"></div>
             <h2>Ready for intelligence</h2>
@@ -294,8 +409,14 @@ const currentUser = ref(readJsonStorage(AUTH_USER_KEY, null))
 const provider = ref('deepseek')
 const settings = ref(buildDefaultSettings())
 const showApiKey = ref(false)
+const viewMode = ref('agent')
 const text = ref('')
 const messages = ref([])
+const agentGoal = ref('')
+const agentTasks = ref([])
+const selectedTask = ref(null)
+const agentLoading = ref(false)
+const agentError = ref('')
 const loading = ref(false)
 const streaming = ref(false)
 const errorMsg = ref('')
@@ -370,6 +491,7 @@ function setSession(nextToken, user) {
   localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user))
   authForm.password = ''
   loadUserData()
+  loadAgentTasks()
 }
 
 async function restoreSession() {
@@ -468,6 +590,120 @@ function validateChatSettings() {
   if (!activeSettings.value.baseUrl) return '请先填写 Base URL'
   if (!activeSettings.value.modelName) return '请先填写模型名称'
   return ''
+}
+
+function agentPayload(extra = {}) {
+  return {
+    provider: provider.value,
+    api_key: activeSettings.value.apiKey,
+    base_url: activeSettings.value.baseUrl,
+    model_name: activeSettings.value.modelName,
+    ...extra,
+  }
+}
+
+async function loadAgentTasks() {
+  if (!currentUser.value) return
+  try {
+    const payload = await apiFetch('/agent/tasks')
+    agentTasks.value = payload.tasks || []
+    if (!selectedTask.value && agentTasks.value.length > 0) {
+      await selectAgentTask(agentTasks.value[0].id)
+    }
+  } catch (error) {
+    agentError.value = safeMessage(error, '任务列表加载失败')
+  }
+}
+
+async function selectAgentTask(taskId) {
+  try {
+    const payload = await apiFetch(`/agent/tasks/${taskId}`)
+    selectedTask.value = payload.task
+  } catch (error) {
+    agentError.value = safeMessage(error, '任务详情加载失败')
+  }
+}
+
+async function createAgentTask() {
+  agentError.value = ''
+  const settingsError = validateChatSettings()
+  if (settingsError) {
+    agentError.value = settingsError
+    return
+  }
+  if (!agentGoal.value.trim()) {
+    agentError.value = '请输入任务目标'
+    return
+  }
+
+  agentLoading.value = true
+  try {
+    const payload = await apiFetch('/agent/tasks', {
+      method: 'POST',
+      body: JSON.stringify(agentPayload({ goal: agentGoal.value.trim() })),
+    })
+    selectedTask.value = payload.task
+    agentGoal.value = ''
+    await loadAgentTasks()
+  } catch (error) {
+    agentError.value = safeMessage(error, '智能体任务创建失败')
+  } finally {
+    agentLoading.value = false
+  }
+}
+
+async function confirmAgentTask() {
+  if (!selectedTask.value) return
+  agentError.value = ''
+  agentLoading.value = true
+  try {
+    const payload = await apiFetch(`/agent/tasks/${selectedTask.value.id}/confirm`, { method: 'POST' })
+    selectedTask.value = payload.task
+    await loadAgentTasks()
+  } catch (error) {
+    agentError.value = safeMessage(error, '任务确认失败')
+  } finally {
+    agentLoading.value = false
+  }
+}
+
+async function runAgentTask() {
+  if (!selectedTask.value) return
+  agentError.value = ''
+  const settingsError = validateChatSettings()
+  if (settingsError) {
+    agentError.value = settingsError
+    return
+  }
+
+  agentLoading.value = true
+  try {
+    const payload = await apiFetch(`/agent/tasks/${selectedTask.value.id}/run`, {
+      method: 'POST',
+      body: JSON.stringify(agentPayload()),
+    })
+    selectedTask.value = payload.task
+    await loadAgentTasks()
+  } catch (error) {
+    agentError.value = safeMessage(error, '任务执行失败')
+  } finally {
+    agentLoading.value = false
+  }
+}
+
+async function cancelAgentTask() {
+  if (!selectedTask.value) return
+  agentError.value = ''
+  agentLoading.value = true
+  try {
+    const payload = await apiFetch(`/agent/tasks/${selectedTask.value.id}/cancel`, { method: 'POST' })
+    selectedTask.value = payload.task
+    await loadAgentTasks()
+  } catch (error) {
+    agentError.value = safeMessage(error, '任务取消失败')
+  } finally {
+    agentLoading.value = false
+  }
 }
 
 function handleSseLine(line, aiMsg) {
@@ -583,6 +819,7 @@ async function send() {
 onMounted(() => {
   if (currentUser.value) loadUserData()
   restoreSession()
+  loadAgentTasks()
 })
 </script>
 
@@ -974,6 +1211,227 @@ textarea:focus {
   gap: 10px;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(143, 166, 214, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.view-tabs button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: transparent;
+  color: #93a6c9;
+  font-weight: 900;
+}
+
+.view-tabs button.active {
+  background: rgba(131, 216, 255, 0.16);
+  color: #eef4ff;
+}
+
+.agent-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  display: grid;
+  gap: 18px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.agent-create,
+.task-list,
+.task-detail,
+.mission-card,
+.final-result {
+  border: 1px solid rgba(143, 166, 214, 0.18);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.agent-create {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1.4fr) auto;
+  gap: 14px;
+  align-items: end;
+  padding: 18px;
+}
+
+.agent-create h2,
+.task-detail h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.agent-create p {
+  margin: 8px 0 0;
+  color: #93a6c9;
+  line-height: 1.55;
+}
+
+.inline-error {
+  grid-column: 1 / -1;
+  padding: 0;
+}
+
+.agent-board {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+  min-height: 420px;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.task-card {
+  display: grid;
+  gap: 5px;
+  min-height: 66px;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid rgba(143, 166, 214, 0.14);
+  border-radius: 14px;
+  background: rgba(5, 10, 20, 0.48);
+  color: #eaf2ff;
+}
+
+.task-card.active {
+  border-color: rgba(118, 213, 255, 0.62);
+  background: linear-gradient(135deg, rgba(50, 143, 255, 0.20), rgba(126, 87, 255, 0.16));
+}
+
+.task-card span {
+  font-weight: 900;
+}
+
+.task-card small,
+.muted-copy {
+  color: #8fa1c6;
+  line-height: 1.5;
+}
+
+.task-detail {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+}
+
+.task-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mission-card,
+.final-result {
+  padding: 14px;
+}
+
+.mission-card strong {
+  color: #83d8ff;
+}
+
+.mission-card p {
+  margin: 8px 0 0;
+  color: #dce8ff;
+  line-height: 1.65;
+}
+
+.timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.timeline-step {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.step-index {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(143, 166, 214, 0.15);
+  color: #dce8ff;
+  font-weight: 900;
+}
+
+.timeline-step.completed .step-index {
+  background: rgba(34, 197, 94, 0.22);
+  color: #b8ffd2;
+}
+
+.timeline-step.running .step-index {
+  background: rgba(59, 130, 246, 0.28);
+  color: #bfdbfe;
+}
+
+.timeline-step.failed .step-index {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fecaca;
+}
+
+.step-body {
+  padding: 14px;
+  border: 1px solid rgba(143, 166, 214, 0.14);
+  border-radius: 16px;
+  background: rgba(5, 10, 20, 0.48);
+}
+
+.step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.step-head strong {
+  color: #eef4ff;
+}
+
+.step-head span {
+  color: #83d8ff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.step-output,
+.final-result {
+  color: #dfebff;
+  line-height: 1.72;
+}
+
+.empty-task {
+  place-content: center;
+  text-align: center;
+  color: #93a6c9;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -1196,6 +1654,17 @@ textarea:focus {
   .header-actions,
   .composer {
     width: 100%;
+  }
+
+  .header-actions,
+  .task-detail-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-create,
+  .agent-board {
+    grid-template-columns: 1fr;
   }
 
   .send-button,
