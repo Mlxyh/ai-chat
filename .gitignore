@@ -1,4 +1,8 @@
 .env 
+**/.env.*
+!**/.env.example
+**/.claude/
+**/.vscode/
 ai-backend/.env 
 ai-backend/app.db
 ai-backend/.venv/

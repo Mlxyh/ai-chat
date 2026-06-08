@@ -11,10 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env.*
+!.env.example
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
+.claude/
 .idea
 .DS_Store
 *.suo
