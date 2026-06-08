@@ -1,21 +1,45 @@
 <template>
   <div class="app-shell">
     <main v-if="!currentUser" class="auth-page">
-      <section class="hero-panel">
-        <div class="brand-mark">
+      <section
+        class="hero-panel"
+        v-motion
+        :initial="{ opacity: 0, y: 28 }"
+        :enter="{ opacity: 1, y: 0, transition: { duration: 260, ease: 'easeOut' } }"
+      >
+        <div class="brand-mark" aria-label="AI Chat UI">
           <span>AI</span>
         </div>
         <p class="eyebrow">Private model gateway</p>
-        <h1>把你的 API Key 接入一个高级 AI 工作台</h1>
-        <p class="hero-copy">登录后选择模型服务，使用自己的密钥发起流式对话。密钥只保存在当前浏览器，后端只做鉴权和转发。</p>
-        <div class="capability-row">
-          <span>OpenAI-compatible</span>
-          <span>Streaming chat</span>
-          <span>Local key storage</span>
+        <h1>AI Chat，把模型对话和智能体任务放进一张工作台。</h1>
+        <p class="hero-copy">自带 API Key，连接 DeepSeek、OpenAI、通义千问或兼容接口。支持流式聊天、Markdown 输出和先确认再执行的智能体任务。</p>
+        <div class="hero-bento" aria-hidden="true">
+          <div class="preview-card preview-card-large">
+            <span class="preview-label">Agent</span>
+            <strong>计划已生成</strong>
+            <div class="preview-lines">
+              <i></i>
+              <i></i>
+              <i></i>
+            </div>
+          </div>
+          <div class="preview-card">
+            <span class="preview-label">Model</span>
+            <strong>{{ providerOptions[0].label }}</strong>
+          </div>
+          <div class="preview-card preview-card-blue">
+            <span class="preview-label">Stream</span>
+            <strong>Ready</strong>
+          </div>
         </div>
       </section>
 
-      <section class="auth-panel">
+      <section
+        class="auth-panel surface-card"
+        v-motion
+        :initial="{ opacity: 0, y: 34 }"
+        :enter="{ opacity: 1, y: 0, transition: { duration: 300, ease: 'easeOut', delay: 80 } }"
+      >
         <div class="panel-topline">
           <div>
             <p class="eyebrow">Account access</p>
@@ -25,8 +49,8 @@
         </div>
 
         <div class="auth-tabs" role="tablist">
-          <button :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">登录</button>
-          <button :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">注册</button>
+          <button :class="{ active: authMode === 'login' }" type="button" @click="switchAuthMode('login')">登录</button>
+          <button :class="{ active: authMode === 'register' }" type="button" @click="switchAuthMode('register')">注册</button>
         </div>
 
         <form class="auth-form" @submit.prevent="submitAuth">
@@ -52,234 +76,272 @@
       </section>
     </main>
 
-    <main v-else class="chat-layout">
-      <aside class="settings-panel">
-        <div class="panel-topline">
-          <div>
-            <p class="eyebrow">Workspace</p>
-            <h2>{{ currentUser.username }}</h2>
-          </div>
-          <button class="ghost-button compact-button" @click="logout">退出</button>
+    <main v-else class="workspace-page">
+      <header class="top-nav">
+        <div class="nav-brand">
+          <div class="brand-mark small"><span>AI</span></div>
+          <strong>AI Chat UI</strong>
         </div>
+        <div class="nav-status">
+          <span class="connection-pill">{{ connectionLabel }}</span>
+          <button class="ghost-button compact-button" type="button" @click="logout">退出</button>
+        </div>
+      </header>
 
-        <section class="settings-section">
-          <div class="section-title">
-            <span>模型服务</span>
+      <div class="chat-layout">
+        <aside
+          class="settings-panel surface-card"
+          v-motion
+          :initial="{ opacity: 0, x: -24 }"
+          :enter="{ opacity: 1, x: 0, transition: { duration: 260, ease: 'easeOut' } }"
+        >
+          <div class="panel-topline">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>{{ currentUser.username }}</h2>
+            </div>
             <span class="status-dot ready">Ready</span>
           </div>
-          <div class="provider-stack">
-            <button
-              v-for="option in providerOptions"
-              :key="option.value"
-              :class="{ active: provider === option.value }"
-              @click="provider = option.value"
-            >
-              <span>{{ option.label }}</span>
-              <small>{{ option.description }}</small>
-            </button>
-          </div>
-        </section>
 
-        <section class="settings-section secret-section">
-          <div class="section-title">
-            <label for="apiKey">API Key</label>
-            <button class="link-button" type="button" @click="showApiKey = !showApiKey">
-              {{ showApiKey ? '隐藏' : '显示' }}
-            </button>
-          </div>
-          <input
-            id="apiKey"
-            v-model.trim="activeSettings.apiKey"
-            :type="showApiKey ? 'text' : 'password'"
-            autocomplete="off"
-            placeholder="sk-..."
-          />
-        </section>
-
-        <section class="settings-section">
-          <label class="field-label" for="baseUrl">Base URL</label>
-          <input id="baseUrl" v-model.trim="activeSettings.baseUrl" placeholder="https://api.example.com/v1" />
-        </section>
-
-        <section class="settings-section">
-          <label class="field-label" for="modelName">模型名称</label>
-          <input id="modelName" v-model.trim="activeSettings.modelName" placeholder="gpt-4o-mini" />
-        </section>
-
-        <div class="security-note">
-          <strong>Local only</strong>
-          <span>API Key 只保存在当前浏览器。后端会拒绝 HTTP、本机和内网 Base URL。</span>
-        </div>
-      </aside>
-
-      <section class="chat-panel">
-        <header class="chat-header">
-          <div>
-            <p class="eyebrow">{{ viewMode === 'agent' ? 'Agent workspace' : activeProviderLabel }}</p>
-            <h1>{{ viewMode === 'agent' ? 'AI 超级智能体' : activeSettings.modelName || '未选择模型' }}</h1>
-          </div>
-          <div class="header-actions">
-            <div class="view-tabs">
-              <button :class="{ active: viewMode === 'agent' }" @click="viewMode = 'agent'">智能体任务</button>
-              <button :class="{ active: viewMode === 'chat' }" @click="viewMode = 'chat'">聊天</button>
+          <section class="settings-section">
+            <div class="section-title">
+              <span>模型服务</span>
             </div>
-            <span class="connection-pill">{{ connectionLabel }}</span>
-            <button v-if="viewMode === 'chat'" class="ghost-button compact-button" @click="clearHistory">清空</button>
-          </div>
-        </header>
-
-        <div v-if="viewMode === 'agent'" class="agent-workspace">
-          <section class="agent-create">
-            <div>
-              <p class="eyebrow">Mission control</p>
-              <h2>告诉智能体你要完成什么</h2>
-              <p>系统会先生成计划，等待你确认后再逐步执行文本型任务。</p>
+            <div class="provider-stack">
+              <button
+                v-for="option in providerOptions"
+                :key="option.value"
+                :class="{ active: provider === option.value }"
+                type="button"
+                @click="provider = option.value"
+              >
+                <span>{{ option.label }}</span>
+                <small>{{ option.description }}</small>
+              </button>
             </div>
-            <textarea
-              v-model="agentGoal"
-              rows="3"
-              placeholder="例如：帮我分析这个项目还能怎么优化，并输出开发任务清单"
-            ></textarea>
-            <p v-if="agentError" class="chat-error inline-error">{{ agentError }}</p>
-            <button class="primary-action" type="button" :disabled="agentLoading" @click="createAgentTask">
-              {{ agentLoading ? '正在规划...' : '创建智能体任务' }}
-            </button>
           </section>
 
-          <section class="agent-board">
-            <aside class="task-list">
-              <div class="section-title">
-                <span>任务历史</span>
-                <button class="link-button" type="button" @click="loadAgentTasks">刷新</button>
-              </div>
-              <button
-                v-for="task in agentTasks"
-                :key="task.id"
-                :class="['task-card', { active: selectedTask?.id === task.id }]"
-                type="button"
-                @click="selectAgentTask(task.id)"
-              >
-                <span>{{ task.title }}</span>
-                <small>{{ task.status }}</small>
+          <section class="settings-section secret-section">
+            <div class="section-title">
+              <label for="apiKey">API Key</label>
+              <button class="link-button" type="button" @click="showApiKey = !showApiKey">
+                {{ showApiKey ? '隐藏' : '显示' }}
               </button>
-              <p v-if="agentTasks.length === 0" class="muted-copy">暂无任务。创建一个目标开始。</p>
-            </aside>
+            </div>
+            <input
+              id="apiKey"
+              v-model.trim="activeSettings.apiKey"
+              :type="showApiKey ? 'text' : 'password'"
+              autocomplete="off"
+              placeholder="sk-..."
+            />
+          </section>
 
-            <article v-if="selectedTask" class="task-detail">
-              <div class="task-detail-head">
-                <div>
-                  <p class="eyebrow">{{ selectedTask.status }}</p>
-                  <h2>{{ selectedTask.title }}</h2>
+          <section class="settings-section">
+            <label class="field-label" for="baseUrl">Base URL</label>
+            <input id="baseUrl" v-model.trim="activeSettings.baseUrl" placeholder="https://api.example.com/v1" />
+          </section>
+
+          <section class="settings-section">
+            <label class="field-label" for="modelName">模型名称</label>
+            <input id="modelName" v-model.trim="activeSettings.modelName" placeholder="gpt-4o-mini" />
+          </section>
+
+          <div class="security-note">
+            <strong>Local only</strong>
+            <span>API Key 只保存在当前浏览器。后端会拒绝 HTTP、本机和内网 Base URL。</span>
+          </div>
+        </aside>
+
+        <section
+          class="chat-panel surface-card"
+          v-motion
+          :initial="{ opacity: 0, y: 24 }"
+          :enter="{ opacity: 1, y: 0, transition: { duration: 280, ease: 'easeOut', delay: 80 } }"
+        >
+          <header class="chat-header">
+            <div>
+              <p class="eyebrow">{{ viewMode === 'agent' ? 'Agent workspace' : activeProviderLabel }}</p>
+              <h1>{{ viewMode === 'agent' ? 'AI 超级智能体' : activeSettings.modelName || '未选择模型' }}</h1>
+            </div>
+            <div class="header-actions">
+              <div class="view-tabs" role="tablist">
+                <button :class="{ active: viewMode === 'agent' }" type="button" @click="viewMode = 'agent'">
+                  智能体任务
+                </button>
+                <button :class="{ active: viewMode === 'chat' }" type="button" @click="viewMode = 'chat'">聊天</button>
+              </div>
+              <button v-if="viewMode === 'chat'" class="ghost-button compact-button" type="button" @click="clearHistory">
+                清空
+              </button>
+            </div>
+          </header>
+
+          <div v-if="viewMode === 'agent'" class="agent-workspace">
+            <section class="agent-create bento-card bento-wide">
+              <div>
+                <p class="eyebrow">Mission control</p>
+                <h2>告诉智能体你要完成什么</h2>
+                <p>系统会先生成计划，等待你确认后再逐步执行文本型任务。</p>
+              </div>
+              <textarea
+                v-model="agentGoal"
+                rows="3"
+                placeholder="例如：帮我分析这个项目还能怎么优化，并输出开发任务清单"
+              ></textarea>
+              <p v-if="agentError" class="chat-error inline-error">{{ agentError }}</p>
+              <button class="primary-action" type="button" :disabled="agentLoading" @click="createAgentTask">
+                {{ agentLoading ? '正在规划...' : '创建智能体任务' }}
+              </button>
+            </section>
+
+            <section class="agent-board">
+              <aside class="task-list bento-card">
+                <div class="section-title">
+                  <span>任务历史</span>
+                  <button class="link-button" type="button" @click="loadAgentTasks">刷新</button>
                 </div>
-                <div class="task-actions">
-                  <button
-                    v-if="selectedTask.status === 'waiting_confirmation'"
-                    class="primary-action compact-button"
-                    type="button"
-                    :disabled="agentLoading"
-                    @click="confirmAgentTask"
-                  >
-                    确认执行此计划
-                  </button>
-                  <button
-                    v-if="selectedTask.status === 'running'"
-                    class="primary-action compact-button"
-                    type="button"
-                    :disabled="agentLoading"
-                    @click="runAgentTask"
-                  >
-                    继续下一步
-                  </button>
-                  <button
-                    v-if="!['completed', 'failed'].includes(selectedTask.status)"
-                    class="ghost-button compact-button"
-                    type="button"
-                    :disabled="agentLoading"
-                    @click="cancelAgentTask"
-                  >
-                    取消任务
-                  </button>
-                </div>
-              </div>
+                <button
+                  v-for="task in agentTasks"
+                  :key="task.id"
+                  :class="['task-card', { active: selectedTask?.id === task.id }]"
+                  type="button"
+                  v-motion
+                  :initial="{ opacity: 0, y: 10 }"
+                  :enter="{ opacity: 1, y: 0, transition: { duration: 200, ease: 'easeOut' } }"
+                  @click="selectAgentTask(task.id)"
+                >
+                  <span>{{ task.title }}</span>
+                  <small>{{ task.status }}</small>
+                </button>
+                <p v-if="agentTasks.length === 0" class="muted-copy">暂无任务。创建一个目标开始。</p>
+              </aside>
 
-              <div class="mission-card">
-                <strong>目标</strong>
-                <p>{{ selectedTask.goal }}</p>
-              </div>
-              <div class="mission-card">
-                <strong>计划</strong>
-                <p>{{ selectedTask.plan }}</p>
-              </div>
-
-              <div class="timeline">
-                <div v-for="step in selectedTask.steps" :key="step.id" :class="['timeline-step', step.status]">
-                  <div class="step-index">{{ step.step_order }}</div>
-                  <div class="step-body">
-                    <div class="step-head">
-                      <strong>{{ step.title }}</strong>
-                      <span>{{ step.status }} · {{ step.tool_name }}</span>
-                    </div>
-                    <p v-if="step.input" class="muted-copy">{{ step.input }}</p>
-                    <div v-if="step.output" class="step-output" v-html="renderMarkdown(step.output)"></div>
-                    <p v-if="step.error" class="form-error">{{ step.error }}</p>
+              <article v-if="selectedTask" class="task-detail bento-card bento-detail">
+                <div class="task-detail-head">
+                  <div>
+                    <p class="eyebrow">{{ selectedTask.status }}</p>
+                    <h2>{{ selectedTask.title }}</h2>
+                  </div>
+                  <div class="task-actions">
+                    <button
+                      v-if="selectedTask.status === 'waiting_confirmation'"
+                      class="primary-action compact-button"
+                      type="button"
+                      :disabled="agentLoading"
+                      @click="confirmAgentTask"
+                    >
+                      确认执行此计划
+                    </button>
+                    <button
+                      v-if="selectedTask.status === 'running'"
+                      class="primary-action compact-button"
+                      type="button"
+                      :disabled="agentLoading"
+                      @click="runAgentTask"
+                    >
+                      继续下一步
+                    </button>
+                    <button
+                      v-if="!['completed', 'failed'].includes(selectedTask.status)"
+                      class="ghost-button compact-button"
+                      type="button"
+                      :disabled="agentLoading"
+                      @click="cancelAgentTask"
+                    >
+                      取消任务
+                    </button>
                   </div>
                 </div>
+
+                <div class="mission-grid">
+                  <div class="mission-card">
+                    <strong>目标</strong>
+                    <p>{{ selectedTask.goal }}</p>
+                  </div>
+                  <div class="mission-card">
+                    <strong>计划</strong>
+                    <p>{{ selectedTask.plan }}</p>
+                  </div>
+                </div>
+
+                <div class="timeline">
+                  <div v-for="step in selectedTask.steps" :key="step.id" :class="['timeline-step', step.status]">
+                    <div class="step-index">{{ step.step_order }}</div>
+                    <div class="step-body">
+                      <div class="step-head">
+                        <strong>{{ step.title }}</strong>
+                        <span>{{ step.status }} · {{ step.tool_name }}</span>
+                      </div>
+                      <p v-if="step.input" class="muted-copy">{{ step.input }}</p>
+                      <div v-if="step.output" class="step-output" v-html="renderMarkdown(step.output)"></div>
+                      <p v-if="step.error" class="form-error">{{ step.error }}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="selectedTask.final_result" class="final-result">
+                  <p class="eyebrow">Final delivery</p>
+                  <div v-html="renderMarkdown(selectedTask.final_result)"></div>
+                </div>
+              </article>
+
+              <article v-else class="task-detail empty-task bento-card bento-detail">
+                <h2>等待任务</h2>
+                <p>创建任务后，智能体会在这里展示计划、步骤和最终交付物。</p>
+              </article>
+            </section>
+          </div>
+
+          <div v-else ref="chatRef" class="chat-messages">
+            <div v-if="messages.length === 0" class="empty-state">
+              <div class="empty-orbit" aria-hidden="true"></div>
+              <h2>Ready for intelligence</h2>
+              <p>配置 API Key 和模型后，开始一次安全的流式对话。</p>
+              <div class="prompt-chips">
+                <button type="button" @click="usePrompt('帮我把这个项目的部署步骤整理成清单')">部署清单</button>
+                <button type="button" @click="usePrompt('分析一下这个产品还可以优化哪些体验')">产品优化</button>
+                <button type="button" @click="usePrompt('写一个简洁的项目 README 结构')">README 结构</button>
               </div>
+            </div>
 
-              <div v-if="selectedTask.final_result" class="final-result">
-                <p class="eyebrow">Final delivery</p>
-                <div v-html="renderMarkdown(selectedTask.final_result)"></div>
+            <div
+              v-for="(msg, index) in messages"
+              :key="index"
+              :class="['message-row', msg.role]"
+              v-motion
+              :initial="{ opacity: 0, y: 12 }"
+              :enter="{ opacity: 1, y: 0, transition: { duration: 180, ease: 'easeOut' } }"
+            >
+              <div class="message-meta">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</div>
+              <div class="message-bubble">
+                <div v-if="msg.done" v-html="msg.content || ''"></div>
+                <div v-else class="streaming-text">{{ msg.content || '' }}</div>
               </div>
-            </article>
+            </div>
 
-            <article v-else class="task-detail empty-task">
-              <h2>等待任务</h2>
-              <p>创建任务后，智能体会在这里展示计划、步骤和最终交付物。</p>
-            </article>
-          </section>
-        </div>
-
-        <div v-else ref="chatRef" class="chat-messages">
-          <div v-if="messages.length === 0" class="empty-state">
-            <div class="empty-orbit"></div>
-            <h2>Ready for intelligence</h2>
-            <p>配置 API Key 和模型后，开始一次安全的流式对话。</p>
-            <div class="prompt-chips">
-              <button type="button" @click="usePrompt('帮我把这个项目的部署步骤整理成清单')">部署清单</button>
-              <button type="button" @click="usePrompt('分析一下这个产品还可以优化哪些体验')">产品优化</button>
-              <button type="button" @click="usePrompt('写一个简洁的项目 README 结构')">README 结构</button>
+            <div v-if="loading" class="message-row ai">
+              <div class="message-meta">Assistant</div>
+              <div class="message-bubble typing">思考中<span></span><span></span><span></span></div>
             </div>
           </div>
 
-          <div v-for="(msg, index) in messages" :key="index" :class="['message-row', msg.role]">
-            <div class="message-meta">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</div>
-            <div class="message-bubble">
-              <div v-if="msg.done" v-html="msg.content || ''"></div>
-              <div v-else class="streaming-text">{{ msg.content || '' }}</div>
-            </div>
-          </div>
+          <p v-if="errorMsg" class="chat-error">{{ errorMsg }}</p>
 
-          <div v-if="loading" class="message-row ai">
-            <div class="message-meta">Assistant</div>
-            <div class="message-bubble typing">思考中<span></span><span></span><span></span></div>
-          </div>
-        </div>
-
-        <p v-if="errorMsg" class="chat-error">{{ errorMsg }}</p>
-
-        <form class="composer" @submit.prevent="send">
-          <textarea
-            ref="textareaRef"
-            v-model="text"
-            rows="1"
-            placeholder="输入你的问题，Enter 发送，Shift+Enter 换行"
-            @input="autoResize"
-            @keydown.enter.exact.prevent="send"
-          ></textarea>
-          <button v-if="streaming" type="button" class="danger-button" @click="stop">停止</button>
-          <button v-else class="primary-action send-button" type="submit" :disabled="loading">发送</button>
-        </form>
-      </section>
+          <form class="composer" @submit.prevent="send">
+            <textarea
+              ref="textareaRef"
+              v-model="text"
+              rows="1"
+              placeholder="输入你的问题"
+              @input="autoResize"
+              @keydown.enter.exact.prevent="send"
+            ></textarea>
+            <button v-if="streaming" type="button" class="danger-button" @click="stop">停止</button>
+            <button v-else class="primary-action send-button" type="submit" :disabled="loading">发送</button>
+          </form>
+        </section>
+      </div>
     </main>
   </div>
 </template>
@@ -396,7 +458,11 @@ const readJsonStorage = (key, fallback) => {
 }
 
 const safeMessage = (error, fallback = '连接失败，请检查网络或稍后重试') => {
-  return typeof error?.message === 'string' && error.message ? error.message : fallback
+  const message = typeof error?.message === 'string' ? error.message : ''
+  if (message === 'Failed to fetch' || message.includes('NetworkError')) {
+    return '无法连接后端服务，请确认 http://localhost:8000 已启动后重试'
+  }
+  return message || fallback
 }
 
 const authMode = ref('login')
@@ -1670,6 +1736,1078 @@ textarea:focus {
   .send-button,
   .danger-button {
     width: 100%;
+  }
+}
+
+/* Apple-inspired refresh */
+:root {
+  --page: #f5f5f7;
+  --surface: #ffffff;
+  --surface-soft: #fbfbfd;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+  --blue: #0071e3;
+  --blue-deep: #005bb5;
+  --green: #2f855a;
+  --red: #d92d20;
+  --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.08);
+  --shadow-card: 0 8px 26px rgba(0, 0, 0, 0.06);
+  --radius-xl: 28px;
+  --radius-lg: 22px;
+  --radius-md: 16px;
+}
+
+html {
+  background: var(--page);
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.app-shell {
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(245, 245, 247, 0) 34%),
+    var(--page);
+  overflow-x: hidden;
+}
+
+.surface-card,
+.auth-panel,
+.settings-panel,
+.chat-panel,
+.bento-card {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(26px) saturate(180%);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 440px);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: center;
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: clamp(28px, 7vw, 84px) 0;
+}
+
+.hero-panel {
+  max-width: 760px;
+}
+
+.brand-mark {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(0, 113, 227, 0.16);
+  border-radius: 20px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(236, 246, 255, 0.92)),
+    #ffffff;
+  box-shadow: 0 14px 42px rgba(0, 113, 227, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  color: var(--blue);
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.brand-mark.small {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.hero-panel .eyebrow {
+  margin-top: 30px;
+}
+
+.hero-panel h1 {
+  max-width: 760px;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(48px, 6.4vw, 86px);
+  line-height: 0.96;
+  letter-spacing: 0;
+}
+
+.hero-copy {
+  max-width: 620px;
+  margin: 24px 0 0;
+  color: var(--muted);
+  font-size: clamp(17px, 2vw, 21px);
+  line-height: 1.58;
+}
+
+.hero-bento {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 14px;
+  max-width: 570px;
+  margin-top: 34px;
+}
+
+.preview-card {
+  min-height: 132px;
+  display: grid;
+  align-content: space-between;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.preview-card-large {
+  grid-row: span 2;
+  min-height: 278px;
+  background:
+    linear-gradient(145deg, #ffffff 0%, #f7fbff 58%, #edf6ff 100%);
+}
+
+.preview-card-blue {
+  background: linear-gradient(145deg, #0071e3, #2997ff);
+  color: #ffffff;
+}
+
+.preview-label {
+  color: inherit;
+  opacity: 0.7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.preview-card strong {
+  font-size: 25px;
+  line-height: 1.08;
+}
+
+.preview-lines {
+  display: grid;
+  gap: 10px;
+}
+
+.preview-lines i {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: #d9e6f7;
+}
+
+.preview-lines i:nth-child(2) {
+  width: 76%;
+}
+
+.preview-lines i:nth-child(3) {
+  width: 54%;
+}
+
+.auth-panel {
+  border-radius: var(--radius-xl);
+  padding: clamp(24px, 3vw, 34px);
+}
+
+.panel-topline,
+.chat-header,
+.section-title,
+.top-nav,
+.nav-brand,
+.nav-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.panel-topline h2,
+.chat-header h1,
+.empty-state h2,
+.agent-create h2,
+.task-detail h2 {
+  margin: 0;
+  color: var(--ink);
+  letter-spacing: 0;
+}
+
+.panel-topline h2 {
+  font-size: 26px;
+}
+
+.auth-tabs,
+.view-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f1f1f3;
+}
+
+.auth-tabs {
+  margin: 28px 0 18px;
+}
+
+.auth-tabs button,
+.view-tabs button,
+.provider-stack button,
+.prompt-chips button,
+.task-card {
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.auth-tabs button,
+.view-tabs button {
+  min-height: 38px;
+  border-radius: 999px;
+  color: #515154;
+  font-weight: 800;
+  transition: background 0.2s ease-out, color 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.auth-tabs button.active,
+.view-tabs button.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.auth-form,
+.settings-section {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-form label,
+.field-label,
+.section-title label,
+.section-title span:first-child {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 8px;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.18s ease-out, box-shadow 0.18s ease-out, background 0.18s ease-out;
+}
+
+input {
+  min-height: 48px;
+  padding: 12px 14px;
+}
+
+textarea {
+  min-height: 54px;
+  max-height: 190px;
+  padding: 14px 16px;
+  resize: none;
+  line-height: 1.55;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #9b9ba1;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  background: #ffffff;
+  border-color: rgba(0, 113, 227, 0.62);
+  color: var(--ink);
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.14);
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--ink);
+  box-shadow: 0 0 0 1000px #ffffff inset, 0 0 0 4px rgba(0, 113, 227, 0.14);
+  caret-color: var(--ink);
+  transition: background-color 9999s ease-out;
+}
+
+.primary-action,
+.ghost-button,
+.danger-button {
+  border: 0;
+  border-radius: 999px;
+  min-height: 44px;
+  padding: 0 18px;
+  font-weight: 900;
+  transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, background 0.2s ease-out, color 0.2s ease-out;
+}
+
+.primary-action {
+  background: var(--blue);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(0, 113, 227, 0.22);
+}
+
+.primary-action:hover:not(:disabled) {
+  background: var(--blue-deep);
+  transform: translateY(-1px);
+}
+
+.ghost-button {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+}
+
+.ghost-button:hover:not(:disabled) {
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+.compact-button,
+.danger-button,
+.send-button {
+  min-height: 42px;
+}
+
+.danger-button {
+  background: var(--red);
+  color: #ffffff;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-pill,
+.connection-pill,
+.status-dot {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink);
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-dot.ready {
+  color: var(--green);
+  border-color: rgba(47, 133, 90, 0.24);
+  background: rgba(236, 253, 245, 0.86);
+}
+
+.form-error,
+.chat-error {
+  margin: 0;
+  color: var(--red);
+  font-size: 14px;
+}
+
+.workspace-page {
+  min-height: 100vh;
+  padding: 16px;
+}
+
+.top-nav {
+  position: sticky;
+  top: 16px;
+  z-index: 20;
+  width: min(1440px, 100%);
+  min-height: 58px;
+  margin: 0 auto 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(28px) saturate(180%);
+}
+
+.nav-brand {
+  justify-content: flex-start;
+}
+
+.nav-brand strong {
+  font-size: 15px;
+}
+
+.chat-layout {
+  width: min(1440px, 100%);
+  min-height: calc(100vh - 106px);
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  gap: 16px;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: calc(100vh - 106px);
+  max-height: calc(100vh - 106px);
+  border-radius: var(--radius-xl);
+  padding: 22px;
+  overflow-y: auto;
+}
+
+.provider-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-stack button {
+  display: grid;
+  gap: 4px;
+  min-height: 68px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #f7f7fa;
+  transition: transform 0.2s ease-out, border-color 0.2s ease-out, background 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.provider-stack button:hover,
+.task-card:hover,
+.prompt-chips button:hover {
+  transform: translateY(-1px);
+}
+
+.provider-stack button span {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.provider-stack button small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.provider-stack button.active {
+  border-color: rgba(0, 113, 227, 0.38);
+  background: #eef6ff;
+  box-shadow: 0 10px 22px rgba(0, 113, 227, 0.12);
+}
+
+.security-note {
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+  padding: 15px;
+  border: 1px solid rgba(47, 133, 90, 0.16);
+  border-radius: 20px;
+  background: #f0fdf4;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.security-note strong {
+  color: var(--green);
+}
+
+.chat-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 106px);
+  max-height: calc(100vh - 106px);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.chat-header {
+  min-height: 82px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.chat-header h1 {
+  font-size: clamp(22px, 2.2vw, 32px);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.view-tabs {
+  display: flex;
+}
+
+.view-tabs button {
+  padding: 0 14px;
+}
+
+.agent-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+  background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
+}
+
+.bento-card {
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.agent-create {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.88fr) minmax(280px, 1.35fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.agent-create p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.inline-error {
+  grid-column: 1 / -1;
+  padding: 0;
+}
+
+.agent-board {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 430px;
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-card {
+  display: grid;
+  gap: 5px;
+  min-height: 66px;
+  padding: 13px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #f7f7fa;
+  color: var(--ink);
+  transition: transform 0.2s ease-out, border-color 0.2s ease-out, background 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.task-card.active {
+  border-color: rgba(0, 113, 227, 0.38);
+  background: #eef6ff;
+  box-shadow: 0 10px 22px rgba(0, 113, 227, 0.1);
+}
+
+.task-card span {
+  font-weight: 900;
+}
+
+.task-card small,
+.muted-copy {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.task-detail {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.task-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mission-card,
+.final-result {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fbfbfd;
+}
+
+.mission-card strong {
+  color: var(--blue);
+}
+
+.mission-card p {
+  margin: 8px 0 0;
+  color: #424245;
+  line-height: 1.65;
+}
+
+.timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.timeline-step {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.step-index {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #e8e8ed;
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.timeline-step.completed .step-index {
+  background: #dcfce7;
+  color: var(--green);
+}
+
+.timeline-step.running .step-index {
+  background: #dbeafe;
+  color: var(--blue);
+}
+
+.timeline-step.failed .step-index {
+  background: #fee2e2;
+  color: var(--red);
+}
+
+.step-body {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.step-head strong {
+  color: var(--ink);
+}
+
+.step-head span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.step-output,
+.final-result {
+  color: #2f3135;
+  line-height: 1.72;
+}
+
+.empty-task {
+  place-content: center;
+  text-align: center;
+  color: var(--muted);
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
+}
+
+.empty-state {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-orbit {
+  width: 96px;
+  height: 96px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(0, 113, 227, 0.16);
+  border-radius: 30px;
+  background:
+    linear-gradient(145deg, #ffffff, #eef6ff),
+    #ffffff;
+  box-shadow: 0 18px 42px rgba(0, 113, 227, 0.14);
+}
+
+.empty-state h2 {
+  color: var(--ink);
+  font-size: clamp(30px, 4vw, 46px);
+}
+
+.empty-state p {
+  max-width: 520px;
+  margin: 10px 0 0;
+  line-height: 1.7;
+}
+
+.prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.prompt-chips button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.05);
+  transition: transform 0.2s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.message-row {
+  display: grid;
+  gap: 7px;
+  margin: 18px 0;
+}
+
+.message-row.user {
+  justify-items: end;
+}
+
+.message-row.ai {
+  justify-items: start;
+}
+
+.message-meta {
+  color: #86868b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.message-bubble {
+  max-width: min(820px, 78%);
+  padding: 15px 17px;
+  border-radius: 22px;
+  line-height: 1.72;
+  word-break: break-word;
+}
+
+.message-row.user .message-bubble {
+  background: var(--blue);
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(0, 113, 227, 0.18);
+}
+
+.message-row.ai .message-bubble {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: #2f3135;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
+}
+
+.message-bubble p {
+  margin: 0 0 12px;
+}
+
+.message-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.message-bubble a {
+  color: var(--blue);
+}
+
+.message-bubble pre {
+  overflow-x: auto;
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #1d1d1f;
+  color: #f5f5f7;
+}
+
+.message-bubble code {
+  font-family: "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.code-block {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.typing,
+.streaming-text {
+  white-space: pre-wrap;
+}
+
+.typing span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.chat-error {
+  padding: 0 24px 12px;
+}
+
+.composer {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(24px) saturate(180%);
+}
+
+.composer textarea {
+  min-height: 52px;
+  border-radius: 22px;
+  background: #f7f7fa;
+}
+
+.send-button,
+.danger-button {
+  width: 86px;
+  height: 52px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1180px) {
+  .chat-layout {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+
+  .agent-board,
+  .agent-create {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .auth-page {
+    grid-template-columns: 1fr;
+    width: min(720px, calc(100% - 28px));
+  }
+
+  .hero-panel {
+    max-width: 100%;
+  }
+
+  .chat-layout {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .settings-panel,
+  .chat-panel {
+    min-height: auto;
+    max-height: none;
+  }
+
+  .settings-panel {
+    order: 2;
+  }
+
+  .chat-panel {
+    order: 1;
+  }
+
+  .message-bubble {
+    max-width: 92%;
+  }
+}
+
+@media (max-width: 640px) {
+  .auth-page {
+    gap: 22px;
+    padding-top: 24px;
+    padding-bottom: 24px;
+  }
+
+  .workspace-page {
+    padding: 10px;
+  }
+
+  .top-nav,
+  .chat-header,
+  .nav-status,
+  .header-actions,
+  .task-detail-head,
+  .composer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .top-nav {
+    top: 10px;
+  }
+
+  .nav-brand {
+    justify-content: flex-start;
+  }
+
+  .hero-panel h1 {
+    font-size: 38px;
+    line-height: 1.02;
+  }
+
+  .hero-panel .eyebrow {
+    margin-top: 18px;
+  }
+
+  .hero-copy {
+    margin-top: 16px;
+    font-size: 16px;
+  }
+
+  .hero-bento {
+    display: none;
+  }
+
+  .mission-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-card-large {
+    grid-row: auto;
+    min-height: 190px;
+  }
+
+  .auth-panel,
+  .settings-panel,
+  .chat-panel,
+  .bento-card {
+    border-radius: 22px;
+  }
+
+  .chat-header,
+  .agent-workspace,
+  .chat-messages,
+  .composer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .view-tabs {
+    width: 100%;
+  }
+
+  .view-tabs button {
+    flex: 1;
+  }
+
+  .send-button,
+  .danger-button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 </style>
