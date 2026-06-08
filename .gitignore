@@ -1,7 +1,0 @@
-.env 
-ai-backend/.env 
-ai-backend/app.db
-ai-backend/.venv/
-ai-backend/__pycache__/
-ai-chat-ui/node_modules/
-ai-chat-ui/dist/
